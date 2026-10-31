@@ -16,3 +16,13 @@ export function closeOnSignal(log: Logger, close: () => Promise<void>): void {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 }
+
+/** The same contract for a role that drains a loop: the signal aborts on SIGINT or SIGTERM. */
+export function shutdownSignal(log: Logger): AbortSignal {
+  const shutdown = new AbortController();
+  closeOnSignal(log, () => {
+    shutdown.abort();
+    return Promise.resolve();
+  });
+  return shutdown.signal;
+}

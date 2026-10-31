@@ -1,9 +1,12 @@
 import { Client } from 'pg';
 import { applyMigrations } from '../../src/infrastructure/migrate.js';
+import { assertKafkaIsReachable } from './kafka.js';
 import { TEST_DATABASE_URL } from './test-database.js';
 
 /** Recreates the test database, so every run starts from the real migrations. */
 export default async function setup(): Promise<void> {
+  await assertKafkaIsReachable();
+
   const url = new URL(TEST_DATABASE_URL);
   const databaseName = url.pathname.slice(1);
   url.pathname = '/postgres';

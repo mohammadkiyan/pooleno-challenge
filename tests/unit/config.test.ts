@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/app/config.js';
+import {
+  loadConfig,
+  loadKafkaConfig,
+  loadMatchingConfig,
+  loadPublisherConfig,
+} from '../../src/app/config.js';
 
 const DATABASE_URL = 'postgres://pooleno@127.0.0.1:55432/pooleno';
 
@@ -30,5 +35,64 @@ describe('loadConfig', () => {
     ['ACCEPTANCE_LOCK_TIMEOUT_MS', '0'],
   ])('rejects %s=%s', (name, value) => {
     expect(() => loadConfig({ DATABASE_URL, [name]: value })).toThrow(name);
+  });
+});
+
+describe('loadKafkaConfig', () => {
+  it('defaults to the local broker and the agreed topic', () => {
+    expect(loadKafkaConfig({})).toEqual({
+      brokers: ['127.0.0.1:59092'],
+      topic: 'orders.accepted',
+    });
+  });
+
+  it('accepts several brokers', () => {
+    expect(loadKafkaConfig({ KAFKA_BROKERS: 'kafka-1:9092,kafka-2:9092' }).brokers).toEqual([
+      'kafka-1:9092',
+      'kafka-2:9092',
+    ]);
+  });
+});
+
+describe('loadPublisherConfig', () => {
+  it('applies defaults', () => {
+    expect(loadPublisherConfig({ DATABASE_URL })).toMatchObject({
+      databaseUrl: DATABASE_URL,
+      pollIntervalMs: 200,
+      retryBaseMs: 500,
+      retryCapMs: 30_000,
+    });
+  });
+
+  it('requires DATABASE_URL', () => {
+    expect(() => loadPublisherConfig({})).toThrow('DATABASE_URL is required');
+  });
+
+  it.each(['OUTBOX_POLL_INTERVAL_MS', 'OUTBOX_RETRY_BASE_MS', 'OUTBOX_RETRY_CAP_MS'])(
+    'rejects %s=0',
+    (name) => {
+      expect(() => loadPublisherConfig({ DATABASE_URL, [name]: '0' })).toThrow(name);
+    },
+  );
+});
+
+describe('loadMatchingConfig', () => {
+  it('applies defaults, including the agreed consumer group', () => {
+    expect(loadMatchingConfig({ DATABASE_URL })).toMatchObject({
+      databaseUrl: DATABASE_URL,
+      groupId: 'matching-v1',
+      sessionTimeoutMs: 10_000,
+      restartDelayMs: 1_000,
+    });
+  });
+
+  it('requires DATABASE_URL', () => {
+    expect(() => loadMatchingConfig({})).toThrow('DATABASE_URL is required');
+  });
+
+  it('rejects a session timeout that the broker would refuse', () => {
+    expect(() =>
+      loadMatchingConfig({ DATABASE_URL, MATCHING_SESSION_TIMEOUT_MS: '5999' }),
+    ).toThrow('MATCHING_SESSION_TIMEOUT_MS');
   });
 });
