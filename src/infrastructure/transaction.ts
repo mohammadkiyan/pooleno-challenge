@@ -1,15 +1,25 @@
 import type { Pool, PoolClient } from 'pg';
 
 /** Commits when `work` resolves and rolls back when it rejects. */
-export async function withTransaction<T>(
+export function withTransaction<T>(pool: Pool, work: (tx: PoolClient) => Promise<T>): Promise<T> {
+  return runTransaction(pool, 'BEGIN', work);
+}
+
+/** Runs several reads against one consistent view of the database. */
+export function withSnapshot<T>(pool: Pool, work: (tx: PoolClient) => Promise<T>): Promise<T> {
+  return runTransaction(pool, 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', work);
+}
+
+async function runTransaction<T>(
   pool: Pool,
+  begin: string,
   work: (tx: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect();
   let connectionBroken = false;
 
   try {
-    await client.query('BEGIN');
+    await client.query(begin);
     const result = await work(client);
     await client.query('COMMIT');
     return result;

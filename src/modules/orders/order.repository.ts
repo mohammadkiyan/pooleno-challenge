@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 import type { CanonicalOrder, OrderSide, OrderStatus, OrderType } from './order.types.js';
 
 export interface NewOrder extends CanonicalOrder {
@@ -20,6 +20,14 @@ export interface StoredOrder {
   acceptanceSeq: bigint;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface StoredTrade {
+  id: string;
+  role: 'MAKER' | 'TAKER';
+  priceUnits: bigint;
+  quantityUnits: bigint;
+  executedAt: Date;
 }
 
 /**
@@ -64,11 +72,11 @@ export async function insertOrder(tx: PoolClient, order: NewOrder): Promise<void
 }
 
 export async function findOrder(
-  pool: Pool,
+  tx: PoolClient,
   scope: string,
   orderId: string,
 ): Promise<StoredOrder | undefined> {
-  const { rows } = await pool.query<{
+  const { rows } = await tx.query<{
     id: string;
     symbol: string;
     side: OrderSide;
@@ -106,4 +114,31 @@ export async function findOrder(
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** The order's executions, in the order they happened. */
+export async function findOrderTrades(tx: PoolClient, orderId: string): Promise<StoredTrade[]> {
+  const { rows } = await tx.query<{
+    id: string;
+    role: StoredTrade['role'];
+    price_units: string;
+    quantity_units: string;
+    executed_at: Date;
+  }>(
+    `SELECT t.id, t.price_units, t.quantity_units, t.executed_at,
+            CASE WHEN t.taker_id = $1 THEN 'TAKER' ELSE 'MAKER' END AS role
+       FROM trades t
+       JOIN orders taker ON taker.id = t.taker_id
+      WHERE t.taker_id = $1 OR t.maker_id = $1
+      ORDER BY taker.acceptance_seq, t.execution_index`,
+    [orderId],
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    role: row.role,
+    priceUnits: BigInt(row.price_units),
+    quantityUnits: BigInt(row.quantity_units),
+    executedAt: row.executed_at,
+  }));
 }

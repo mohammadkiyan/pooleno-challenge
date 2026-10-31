@@ -494,6 +494,7 @@ describe('GET /v1/orders/:orderId', () => {
       acceptanceSequence: '1',
       acceptedAt: expect.any(String),
       updatedAt: expect.any(String),
+      trades: [],
     });
   });
 

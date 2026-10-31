@@ -35,6 +35,14 @@ export const OrderParams = Type.Object({
   orderId: Type.String({ pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }),
 });
 
+export const OrderTrade = Type.Object({
+  tradeId: Type.String(),
+  role: Type.Enum(['MAKER', 'TAKER']),
+  price: Type.String(),
+  quantity: Type.String(),
+  executedAt: Type.String(),
+});
+
 export const OrderResponse = Type.Object({
   orderId: Type.String(),
   symbol: Type.String(),
@@ -48,4 +56,5 @@ export const OrderResponse = Type.Object({
   acceptanceSequence: Type.String(),
   acceptedAt: Type.String(),
   updatedAt: Type.String(),
+  trades: Type.Array(OrderTrade),
 });
