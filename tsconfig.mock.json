@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "mock-api",
+    "outDir": "dist/mock-api",
+    "sourceMap": true
+  },
+  "include": ["mock-api"]
+}

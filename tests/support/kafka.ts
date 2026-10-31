@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   Admin,
+  compatibilityPartitioner,
   Consumer,
   MessagesStreamFallbackModes,
   MessagesStreamModes,
+  ProduceAcks,
+  Producer,
   stringDeserializers,
+  stringSerializers,
 } from '@platformatic/kafka';
 import { pino } from 'pino';
 import type { KafkaConfig } from '../../src/app/config.js';
@@ -53,6 +57,28 @@ function createReader({ brokers }: KafkaConfig) {
     bootstrapBrokers: brokers,
     deserializers: stringDeserializers,
   });
+}
+
+/** Puts messages on the topic as they are, in order. A missing value is a Kafka tombstone. */
+export async function produceRaw(
+  { kafka }: TestStream,
+  messages: { key: string; value?: string }[],
+): Promise<void> {
+  const producer = new Producer({
+    clientId: 'pooleno-test-producer',
+    bootstrapBrokers: kafka.brokers,
+    serializers: stringSerializers,
+    acks: ProduceAcks.ALL,
+    partitioner: compatibilityPartitioner,
+  });
+
+  try {
+    await producer.send({
+      messages: messages.map((message) => ({ topic: kafka.topic, ...message })),
+    });
+  } finally {
+    await producer.close();
+  }
 }
 
 /** Reads everything that is in the topic right now, with no effect on any group's progress. */

@@ -121,6 +121,43 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
+  external:
+    <<: *app
+    command: ["node", "dist/entrypoints/external.js"]
+    environment:
+      DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
+      KAFKA_BROKERS: kafka:19092
+      EXTERNAL_API_URL: http://mock-api:58080/v1/notifications
+    restart: on-failure
+    # Not on mock-api: the destination being down is a delivery condition, not a reason to wait.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+
+  mock-api:
+    <<: *app
+    command: ["node", "dist/mock-api/server.js"]
+    environment:
+      MOCK_API_HOST: 0.0.0.0
+      MOCK_API_PORT: 58080
+      MOCK_API_DATABASE: /var/lib/mock-api/mock-api.sqlite
+    ports:
+      - "127.0.0.1:58080:58080"
+    volumes:
+      - mock-data:/var/lib/mock-api
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('node:net').connect(58080, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
 volumes:
   postgres-data:
   kafka-data:
+  mock-data:

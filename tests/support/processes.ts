@@ -13,6 +13,17 @@ export const CLEAN_EXIT: ExitStatus = { code: 0, signal: null };
 // Allows for a process starting up and then waiting out a dead member's Kafka session.
 const WAIT_MS = 45_000;
 
+const ENTRYPOINTS = {
+  api: 'src/entrypoints/api.ts',
+  publisher: 'src/entrypoints/publisher.ts',
+  matching: 'src/entrypoints/matching.ts',
+  external: 'src/entrypoints/external.ts',
+  'redrive-external': 'src/entrypoints/redrive-external.ts',
+  'mock-api': 'mock-api/server.ts',
+};
+
+type Entrypoint = keyof typeof ENTRYPOINTS;
+
 const running = new Set<RoleProcess>();
 
 /** A real entrypoint running as its own process, so that it can really crash. */
@@ -21,11 +32,16 @@ export class RoleProcess {
   readonly #child: ChildProcessWithoutNullStreams;
   #output = '';
 
-  constructor(role: 'api' | 'publisher' | 'matching', env: NodeJS.ProcessEnv, preload?: string) {
+  constructor(
+    entrypoint: Entrypoint,
+    env: NodeJS.ProcessEnv,
+    preload?: string,
+    args: string[] = [],
+  ) {
     const preloadArguments = preload ? ['--import', preload] : [];
     this.#child = spawn(
       process.execPath,
-      ['--import', 'tsx', ...preloadArguments, `src/entrypoints/${role}.ts`],
+      ['--import', 'tsx', ...preloadArguments, ENTRYPOINTS[entrypoint], ...args],
       { env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL, ...env } },
     );
 

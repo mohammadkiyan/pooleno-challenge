@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "scripts", "vitest.config.ts"]
+  "include": ["src", "mock-api", "tests", "scripts", "vitest.config.ts"]
 }

@@ -1,7 +1,7 @@
 {
   "name": "pooleno-order-processing",
   "version": "0.1.0",
-  "description": "Reliable asynchronous order processing: durable acceptance, an ordered Outbox to Kafka and a deterministic matching consumer.",
+  "description": "Reliable asynchronous order processing: durable acceptance, an ordered Outbox to Kafka, a deterministic matching consumer and durable external notifications.",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,7 +11,7 @@
     "dev": "tsx watch --env-file=.env src/entrypoints/api.ts",
     "migrate": "tsx --env-file=.env src/entrypoints/migrate.ts",
     "demo": "tsx scripts/demo.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.mock.json",
     "start": "node --env-file=.env dist/entrypoints/api.js",
     "typecheck": "tsc",
     "lint": "eslint .",
@@ -20,7 +20,10 @@
     "check": "npm run typecheck && npm run lint && npm test",
     "kafka:init": "tsx --env-file=.env src/entrypoints/init-kafka.ts",
     "dev:publisher": "tsx watch --env-file=.env src/entrypoints/publisher.ts",
-    "dev:matching": "tsx watch --env-file=.env src/entrypoints/matching.ts"
+    "dev:matching": "tsx watch --env-file=.env src/entrypoints/matching.ts",
+    "dev:external": "tsx watch --env-file=.env src/entrypoints/external.ts",
+    "dev:mock-api": "tsx watch --env-file=.env mock-api/server.ts",
+    "external:redrive": "tsx --env-file=.env src/entrypoints/redrive-external.ts"
   },
   "dependencies": {
     "@fastify/type-provider-typebox": "6.3.0",

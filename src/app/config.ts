@@ -29,6 +29,26 @@ export interface MatchingConfig {
   restartDelayMs: number;
 }
 
+export interface NotificationRetryPolicy {
+  baseMs: number;
+  capMs: number;
+  jitterPercent: number;
+  maxAttempts: number;
+}
+
+export interface ExternalConfig {
+  databaseUrl: string;
+  logLevel: string;
+  kafka: KafkaConfig;
+  groupId: string;
+  sessionTimeoutMs: number;
+  restartDelayMs: number;
+  targetUrl: string;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  retry: NotificationRetryPolicy;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     databaseUrl: readDatabaseUrl(env),
@@ -73,6 +93,33 @@ export function loadMatchingConfig(env: NodeJS.ProcessEnv = process.env): Matchi
   };
 }
 
+export function loadExternalConfig(env: NodeJS.ProcessEnv = process.env): ExternalConfig {
+  return {
+    databaseUrl: readDatabaseUrl(env),
+    logLevel: env.LOG_LEVEL ?? 'info',
+    kafka: loadKafkaConfig(env),
+    groupId: env.EXTERNAL_GROUP_ID ?? 'external-notification-v1',
+    sessionTimeoutMs: readInteger(env, 'EXTERNAL_SESSION_TIMEOUT_MS', {
+      fallback: 10_000,
+      min: 6_000,
+    }),
+    restartDelayMs: readInteger(env, 'EXTERNAL_RESTART_DELAY_MS', { fallback: 1_000, min: 1 }),
+    targetUrl: readTargetUrl(env),
+    timeoutMs: readInteger(env, 'EXTERNAL_TIMEOUT_MS', { fallback: 5_000, min: 1 }),
+    pollIntervalMs: readInteger(env, 'EXTERNAL_POLL_INTERVAL_MS', { fallback: 500, min: 1 }),
+    retry: {
+      baseMs: readInteger(env, 'EXTERNAL_RETRY_BASE_MS', { fallback: 1_000, min: 1 }),
+      capMs: readInteger(env, 'EXTERNAL_RETRY_CAP_MS', { fallback: 300_000, min: 1 }),
+      jitterPercent: readInteger(env, 'EXTERNAL_RETRY_JITTER_PERCENT', {
+        fallback: 50,
+        min: 0,
+        max: 100,
+      }),
+      maxAttempts: readInteger(env, 'EXTERNAL_MAX_ATTEMPTS', { fallback: 400, min: 1 }),
+    },
+  };
+}
+
 function readDatabaseUrl(env: NodeJS.ProcessEnv): string {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
@@ -81,10 +128,20 @@ function readDatabaseUrl(env: NodeJS.ProcessEnv): string {
   return databaseUrl;
 }
 
+/** Checked at startup, because a bad URL would otherwise look like an outage for days. */
+function readTargetUrl(env: NodeJS.ProcessEnv): string {
+  const url = env.EXTERNAL_API_URL ?? 'http://127.0.0.1:58080/v1/notifications';
+  if (!URL.canParse(url)) {
+    // The value is left out, because a URL can carry credentials and this reaches the logs.
+    throw new Error('EXTERNAL_API_URL must be an absolute URL');
+  }
+  return url;
+}
+
 function readInteger(
   env: NodeJS.ProcessEnv,
   name: string,
-  { fallback, min }: { fallback: number; min: number },
+  { fallback, min, max = Infinity }: { fallback: number; min: number; max?: number },
 ): number {
   const raw = env[name];
   if (raw === undefined) {
@@ -92,8 +149,9 @@ function readInteger(
   }
 
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < min) {
-    throw new Error(`${name} must be an integer of at least ${min}, got "${raw}"`);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    const range = max === Infinity ? `of at least ${min}` : `from ${min} to ${max}`;
+    throw new Error(`${name} must be an integer ${range}, got "${raw}"`);
   }
   return value;
 }

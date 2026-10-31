@@ -1,12 +1,14 @@
-// Walks through the acceptance contract and then the agreed matching fixture against a
-// running stack. Keys are fixed, so a rerun replays the same orders and trades nothing new.
-// Restart the stack between runs to see the results survive.
+// Walks through the acceptance contract, the agreed matching fixture and the external
+// notification against a running stack. Keys are fixed, so a rerun replays the same orders,
+// trades nothing new and causes no second effect. Restart the stack between runs to see the
+// results survive.
 import { setTimeout as pause } from 'node:timers/promises';
 
 const API_URL = process.env.API_URL ?? 'http://127.0.0.1:8080';
+const MOCK_API_URL = process.env.MOCK_API_URL ?? 'http://127.0.0.1:58080';
 const DEMO_KEY = 'demo-order-key-0001';
-const FILL_WAIT_ATTEMPTS = 60;
-const FILL_WAIT_INTERVAL_MS = 500;
+const WAIT_ATTEMPTS = 60;
+const WAIT_INTERVAL_MS = 500;
 
 const order = { symbol: 'BTC-USD', side: 'BUY', type: 'LIMIT', price: '100.00', quantity: '2.500' };
 
@@ -16,12 +18,17 @@ interface OrderState {
   trades: { role: string; price: string; quantity: string }[];
 }
 
+interface Effect {
+  idempotencyKey: string;
+  body: string;
+}
+
 // Node.js 26.7's fetch can stall for many seconds when it reuses an idle connection, so each
 // request opens its own. See docs/adr/0002-phase-2-messaging-and-matching.md.
-function request(path: string, init: RequestInit = {}): Promise<Response> {
+function request(target: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('connection', 'close');
-  return fetch(new URL(path, API_URL), { ...init, headers });
+  return fetch(new URL(target, API_URL), { ...init, headers });
 }
 
 async function send(title: string, method: string, path: string, init: RequestInit = {}) {
@@ -53,15 +60,21 @@ async function readOrder(orderId: string): Promise<OrderState> {
   return (await response.json()) as OrderState;
 }
 
-async function waitUntilFilled(name: string, orderId: string): Promise<OrderState> {
-  for (let attempt = 0; attempt < FILL_WAIT_ATTEMPTS; attempt += 1) {
-    const state = await readOrder(orderId);
-    if (state.status === 'FILLED') {
-      return state;
+async function readEffects(orderId: string): Promise<Effect[]> {
+  const response = await request(`${MOCK_API_URL}/__control/effects`);
+  const { effects } = (await response.json()) as { effects: Effect[] };
+  return effects.filter(({ body }) => (JSON.parse(body) as { orderId: string }).orderId === orderId);
+}
+
+async function waitFor<T>(failure: string, read: () => Promise<T | undefined>): Promise<T> {
+  for (let attempt = 0; attempt < WAIT_ATTEMPTS; attempt += 1) {
+    const value = await read();
+    if (value !== undefined) {
+      return value;
     }
-    await pause(FILL_WAIT_INTERVAL_MS);
+    await pause(WAIT_INTERVAL_MS);
   }
-  throw new Error(`${name} is not FILLED yet. Are the publisher and matching processes running?`);
+  throw new Error(failure);
 }
 
 const { orderId } = await postOrder('Accept an order', DEMO_KEY, order);
@@ -93,7 +106,13 @@ const s2 = await placeOnEth('S2', 'SELL', '3', '100');
 await placeOnEth('S3', 'SELL', '1', '99');
 const b1 = await placeOnEth('B1', 'BUY', '4', '100');
 
-const taker = await waitUntilFilled('B1', b1);
+const taker = await waitFor(
+  'B1 is not FILLED yet. Are the publisher and matching processes running?',
+  async () => {
+    const state = await readOrder(b1);
+    return state.status === 'FILLED' ? state : undefined;
+  },
+);
 console.log(
   '\nB1 is FILLED. Its trades, in execution order (on an empty book, 1 @ 99, 2 @ 100, 1 @ 100):',
 );
@@ -106,3 +125,17 @@ console.log(`\nS2 is ${maker.status} with ${maker.remainingQuantity} left, first
 
 await placeOnEth('S4', 'SELL', '1', '100');
 console.log('\nS4 arrived after S2 at the same price, so it queues behind S2.');
+
+console.log('\n--- External notification ---');
+
+const effects = await waitFor(
+  'The destination has no effect for B1 yet. Are the external and mock-api processes running?',
+  async () => {
+    const found = await readEffects(b1);
+    return found.length > 0 ? found : undefined;
+  },
+);
+console.log(`\nThe destination holds ${effects.length} effect for B1:`);
+for (const { idempotencyKey } of effects) {
+  console.log(`  ${idempotencyKey}`);
+}

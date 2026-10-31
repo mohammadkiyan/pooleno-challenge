@@ -1,8 +1,8 @@
 # pooleno-order-processing
 
-Accepts limit orders over HTTP, commits each one to PostgreSQL before answering `202 Accepted`, then publishes it through an Outbox to Kafka and matches it in price-time order. A retry cannot create a second order, a crash cannot lose a confirmed one, and a redelivered event cannot repeat a trade.
+Accepts limit orders over HTTP, commits each one to PostgreSQL before answering `202 Accepted`, then publishes it through an Outbox to Kafka, matches it in price-time order and notifies an external API. A retry cannot create a second order, a crash cannot lose a confirmed one, a redelivered event cannot repeat a trade, and a lost response cannot repeat a notification's effect.
 
-**Status: Phase 2 of 4, awaiting review.** Phase 2 adds the ordered publisher, the pure matching engine, and the consumer that commits trades and restores the book. External notifications arrive in Phase 3, and health endpoints and lag visibility in Phase 4.
+**Status: Phase 3 of 4, awaiting review.** Phase 3 adds the durable notification jobs, their worker, and a mock destination with durable idempotency. Health endpoints and lag visibility arrive in Phase 4.
 
 **Contents:** [Features](#features) · [Getting started](#getting-started) · [API](#api) · [Configuration](#configuration) · [Tests](#tests) · [Layout](#layout) · [Known limitations](#known-limitations)
 
@@ -15,10 +15,13 @@ Accepts limit orders over HTTP, commits each one to PostgreSQL before answering 
 - **Price-time matching:** makers trade best price first, oldest first within a price, at the maker's price. The engine is pure code with no dependency on Fastify, PostgreSQL or Kafka.
 - **Durable matching:** trades, order changes, progress and the Inbox commit in one transaction. The book changes only after that commit, and the offset only after the book.
 - **Restore from the database:** any failure discards the book and rebuilds it from committed rows, so memory and the database cannot drift apart for long.
+- **Durable notifications:** a separate consumer group turns each accepted order into a job before its offset advances, and a worker delivers it under a stable key. Attempts and due times survive restarts.
+- **Independence:** the destination being down delays only notifications. Matching continues, and no order changes because of it.
+- **Inspectable failures:** a permanent rejection or an exhausted budget leaves a `FAILED` job for a manual redrive, under the same event and key.
 
 ## Getting started
 
-You need Docker with Compose, Node.js 26 or newer, and free local ports `8080`, `55432` and `59092`.
+You need Docker with Compose, Node.js 26 or newer, and free local ports `8080`, `55432`, `58080` and `59092`.
 
 ```bash
 npm ci
@@ -28,19 +31,19 @@ npm run demo
 
 The demo first shows the acceptance contract: it accepts an order, retries it with different decimal spelling, reuses the key for a different order, sends too much precision, and reads the order back.
 
-It then runs the agreed fixture on `ETH-USD`. S1 sells 2 at 100, S2 sells 3 at 100, S3 sells 1 at 99, and B1 buys 4 at 100. B1 trades 1 at 99 with S3, 2 at 100 with S1 and 1 at 100 with S2, which leaves S2 with 2 and first at its price. A later sell at 100 queues behind S2.
+It then runs the agreed fixture on `ETH-USD`. S1 sells 2 at 100, S2 sells 3 at 100, S3 sells 1 at 99, and B1 buys 4 at 100. B1 trades 1 at 99 with S3, 2 at 100 with S1 and 1 at 100 with S2, which leaves S2 with 2 and first at its price. A later sell at 100 queues behind S2. Finally it shows the one effect that B1's notification caused at the mock destination.
 
 These results assume an empty `ETH-USD` book, because orders already resting there take part in the match. If you have placed other orders that could trade, run `docker compose down -v` first to start clean.
 
 To prove that the results survive a crash, kill every process and run the demo again:
 
 ```bash
-docker compose kill -s SIGKILL api publisher matching postgres kafka
+docker compose kill -s SIGKILL api publisher matching external mock-api postgres kafka
 docker compose up -d --wait
 npm run demo
 ```
 
-The demo uses fixed keys, so the second run prints the same order IDs and the same three trades, with no new executions.
+The demo uses fixed keys, so the second run prints the same order IDs, the same three trades and the same single effect, with no new executions.
 
 To see acceptance outlast a Kafka outage:
 
@@ -55,12 +58,59 @@ docker compose start kafka
 
 The `POST` still answers `202`. Once Kafka is back, the publisher sends the event and `GET` reports the order as `OPEN`.
 
+### See a lost response cause no second effect
+
+The mock can commit its effect and then drop the connection, which is the gap that a local Inbox cannot close. This queues that fault, followed by a `503` whose `Retry-After` holds the job long enough to restart the mock in between:
+
+```bash
+curl -i http://127.0.0.1:58080/__control/faults \
+  -H 'content-type: application/json' \
+  -d '{"mode":"lost-response"}'
+curl -i http://127.0.0.1:58080/__control/faults \
+  -H 'content-type: application/json' \
+  -d '{"mode":"status","status":503,"retryAfter":"15"}'
+curl -i http://127.0.0.1:8080/v1/orders \
+  -H 'content-type: application/json' \
+  -H 'idempotency-key: lost-response-demo-0001' \
+  -d '{"symbol":"ETH-USD","side":"SELL","type":"LIMIT","price":"200.00","quantity":"1"}'
+sleep 5
+docker compose kill -s SIGKILL mock-api
+docker compose up -d --wait mock-api
+sleep 15
+docker compose logs mock-api | grep '"outcome"' | tail -2
+docker compose exec postgres psql -U pooleno -d pooleno -c "
+  SELECT target_key, status, attempts FROM external_jobs ORDER BY created_at DESC LIMIT 1;"
+curl -s http://127.0.0.1:58080/__control/effects | grep -o 'external-notify:[0-9a-f-]*' | sort | uniq -c
+```
+
+The job is `SUCCEEDED` after three attempts: the lost response, the `503`, and the replay. The log shows `applied` and then, after the restart, `replayed` for one key, and the last command counts every key once.
+
+### See a failed job redriven
+
+A permanent rejection fails the job at once and leaves it for an operator. Replace the event ID with the one the query prints:
+
+```bash
+curl -i http://127.0.0.1:58080/__control/faults \
+  -H 'content-type: application/json' \
+  -d '{"mode":"status","status":400}'
+curl -i http://127.0.0.1:8080/v1/orders \
+  -H 'content-type: application/json' \
+  -H 'idempotency-key: redrive-demo-order-0001' \
+  -d '{"symbol":"ETH-USD","side":"SELL","type":"LIMIT","price":"210.00","quantity":"1"}'
+sleep 3
+docker compose exec postgres psql -U pooleno -d pooleno -c "
+  SELECT event_id, status, last_error FROM external_jobs WHERE status = 'FAILED';"
+docker compose run --rm --no-deps external node dist/entrypoints/redrive-external.js <eventId>
+```
+
+The job is `SUCCEEDED` moments later, under the same key. Other procedures are in [ADR 0003](docs/adr/0003-phase-3-external-notifications.md#operator-procedures).
+
 ### Run on the host
 
 Each process runs in its own terminal, after stopping its container and preparing the dependencies:
 
 ```bash
-docker compose stop api publisher matching
+docker compose stop api publisher matching external mock-api
 docker compose up -d --wait postgres kafka
 cp .env.example .env
 npm run migrate
@@ -69,11 +119,15 @@ npm run kafka:init
 npm run dev
 npm run dev:publisher
 npm run dev:matching
+npm run dev:external
+npm run dev:mock-api
 ```
 
-`npm run build` followed by `npm start` runs the compiled API instead.
+`npm run build` followed by `npm start` runs the compiled API instead, and `npm run external:redrive -- <eventId>` redrives a failed job from the host.
 
-To stop everything, run `docker compose down`. Add `-v` to delete the database and Kafka's data as well.
+The host's mock keeps its effects in `mock-api.sqlite`, apart from the container's volume. Orders that a Compose run has already notified are therefore missing from it, and `npm run demo` fails waiting for B1's effect. To start clean, run `docker compose down -v` before this list, which also deletes the database and Kafka's data.
+
+To stop everything, run `docker compose down`. Add `-v` to delete the database, Kafka's data and the container mock's effects as well. The host's `mock-api.sqlite*` files stay until you delete them.
 
 ## API
 
@@ -165,21 +219,34 @@ Compose sets its own values. Running on the host reads `.env`, copied from [.env
 
 | Variable | Used by | Description | Default |
 |---|---|---|---|
-| `DATABASE_URL` | API, publisher, matching, `migrate` | PostgreSQL connection string | Required |
-| `LOG_LEVEL` | API, publisher, matching, `kafka:init` | pino log level | `info` |
+| `DATABASE_URL` | API, publisher, matching, external, `migrate`, `external:redrive` | PostgreSQL connection string | Required |
+| `LOG_LEVEL` | All | pino log level | `info` |
 | `HOST` | API | Listen address | `127.0.0.1` |
 | `PORT` | API | Listen port; `0` picks a free one | `8080` |
 | `ACCEPTANCE_LOCK_TIMEOUT_MS` | API | Longest wait for a lock during acceptance, at least 1 | `1000` |
-| `KAFKA_BROKERS` | Publisher, matching, `kafka:init` | Comma-separated `host:port` list | `127.0.0.1:59092` |
-| `KAFKA_TOPIC` | Publisher, matching, `kafka:init` | Topic for accepted orders | `orders.accepted` |
+| `KAFKA_BROKERS` | Publisher, matching, external, `kafka:init` | Comma-separated `host:port` list | `127.0.0.1:59092` |
+| `KAFKA_TOPIC` | Publisher, matching, external, `kafka:init` | Topic for accepted orders | `orders.accepted` |
 | `OUTBOX_POLL_INTERVAL_MS` | Publisher | Pause when nothing is due | `200` |
 | `OUTBOX_RETRY_BASE_MS` | Publisher | Delay after the first failed send, doubling on each attempt | `500` |
 | `OUTBOX_RETRY_CAP_MS` | Publisher | Longest delay between attempts | `30000` |
 | `MATCHING_GROUP_ID` | Matching | Kafka consumer group | `matching-v1` |
 | `MATCHING_SESSION_TIMEOUT_MS` | Matching | Kafka session timeout, at least 6000 | `10000` |
 | `MATCHING_RESTART_DELAY_MS` | Matching | Pause before restoring after a failure | `1000` |
+| `EXTERNAL_GROUP_ID` | External | Kafka consumer group | `external-notification-v1` |
+| `EXTERNAL_SESSION_TIMEOUT_MS` | External | Kafka session timeout, at least 6000 | `10000` |
+| `EXTERNAL_RESTART_DELAY_MS` | External | Pause after a failed session or delivery pass | `1000` |
+| `EXTERNAL_API_URL` | External | Where notifications go, as an absolute URL | `http://127.0.0.1:58080/v1/notifications` |
+| `EXTERNAL_TIMEOUT_MS` | External | Limit on one attempt | `5000` |
+| `EXTERNAL_POLL_INTERVAL_MS` | External | Pause when no job is due | `500` |
+| `EXTERNAL_RETRY_BASE_MS` | External | Delay after the first failed attempt, doubling on each attempt | `1000` |
+| `EXTERNAL_RETRY_CAP_MS` | External | Longest delay between attempts, and the limit on `Retry-After` | `300000` |
+| `EXTERNAL_RETRY_JITTER_PERCENT` | External | Largest share of a delay removed at random, 0 to 100 | `50` |
+| `EXTERNAL_MAX_ATTEMPTS` | External | Attempts before a job fails, which lasts about a day by default | `400` |
+| `MOCK_API_DATABASE` | Mock API | SQLite file that holds its effects | Required |
+| `MOCK_API_HOST` | Mock API | Listen address | `127.0.0.1` |
+| `MOCK_API_PORT` | Mock API | Listen port | `58080` |
 
-Decisions are recorded in [ADR 0001](docs/adr/0001-phase-1-tooling.md) (versions, markets, demo scope, time budgets) and [ADR 0002](docs/adr/0002-phase-2-messaging-and-matching.md) (Kafka client and broker, tree, topic, ownership, the matching transaction, operator procedures).
+Decisions are recorded in [ADR 0001](docs/adr/0001-phase-1-tooling.md) (versions, markets, demo scope, time budgets), [ADR 0002](docs/adr/0002-phase-2-messaging-and-matching.md) (Kafka client and broker, tree, topic, ownership, the matching transaction, operator procedures) and [ADR 0003](docs/adr/0003-phase-3-external-notifications.md) (job states, HTTP client, retry budget, failure classes, quarantine policy, the mock, the idempotency and independence reviews).
 
 ## Tests
 
@@ -233,25 +300,49 @@ Production code has no test hooks. Each failure is injected from outside:
 | Malformed message | The test produces one directly to the topic | Later events wait with no state change, until an operator moves the offset past it |
 | Lost Kafka event | The test marks an event as published without sending it, with a later event behind it in the topic | Matching blocks rather than skips. The operator procedure republishes unapplied events from the Outbox, and matching resumes in order with no repeated trade |
 
+### External notifications
+
+| Failure | How it is injected | Result proven |
+|---|---|---|
+| Remote effect commits, response lost | The mock commits and resets the connection, and is then killed and restarted | The retry uses the same key, the mock replays, and there is one effect |
+| Remote effect commits, then a timeout | The mock commits and never answers | The retry uses the same key, with one effect |
+| Crash during the call | `SIGKILL` of the worker while the mock withholds its answer | The next owner reclaims the job, with one effect |
+| Destination outage | The mock is not running | Matching continues, and attempts and due times survive a restart of the role |
+| Matching blocked | A malformed event stops matching | Valid events behind it are still notified, because the groups are separate |
+| Kafka unreachable | The role points at a closed port | Existing jobs are still delivered |
+| Retries exhausted | The mock is not running, with a small budget | The job is `FAILED`, and the order is unchanged |
+| Crash between the handoff and the offset | A preload that sends `SIGKILL` as the offset is committed | The redelivery creates no second job |
+| `SIGTERM` or a rebalance during the handoff | The test holds the Inbox row, then signals or joins the group | The transaction finishes, and no offset passes durable work |
+| Database failure in the handoff | A database trigger raises on the insert | The offset holds until the job is stored |
+| Malformed message | Invalid JSON, a wrong shape and a tombstone on the topic | Each is quarantined, then the valid event behind them is delivered |
+| Quarantine write fails | A database trigger raises on the insert | The offset holds until the message is recorded |
+| `Retry-After` | The mock answers 503 with the header | The next attempt waits at least that long, up to the cap |
+| Conflicting body | A different body under the same key | `422`, a `FAILED` job, and the earlier effect is untouched |
+| Permanent status | The mock answers 400 | The job is `FAILED` at once, and the redrive command delivers it under the same key |
+| `SIGTERM` during an attempt | The mock withholds its answer | The attempt finishes within its timeout, and the process exits cleanly |
+
 ### Ownership
 
 | Failure | How it is injected | Result proven |
 |---|---|---|
-| Second process started | A real second publisher or matcher | It waits, does nothing, and takes over after `SIGKILL` of the owner |
+| Second process started | A real second publisher, matcher or external role | It waits, does nothing, and takes over after `SIGKILL` of the owner |
 | Ownership connection lost | `pg_terminate_backend` on the lock's connection | The role stops and exits with status 1 |
 
 ## Layout
 
 ```text
 src/
-  entrypoints/        Process entrypoints: api, publisher, matching, migrate, init-kafka
+  entrypoints/        Process entrypoints: api, publisher, matching, external, redrive-external,
+                      migrate, init-kafka
   app/                API assembly, configuration, errors, signals, single ownership
   infrastructure/     Pool, transactions, session lock, logger, migration runner
   modules/orders/     Routes, acceptance, idempotency, decimals, markets
   modules/messaging/  Event schema, Outbox, publisher, Kafka clients, Inbox, consumer
   modules/matching/   Pure engine and book, plus the transaction and restore around them
+  modules/external/   Job handoff, worker, HTTP client and job storage
+mock-api/             Stand-in destination with durable idempotency, sharing nothing with src/
 migrations/           SQL files, applied in name order
-scripts/demo.ts       Repeatable walkthrough of the contract and the matching fixture
+scripts/demo.ts       Repeatable walkthrough of the contract, the fixture and a notification
 tests/                unit, integration (PostgreSQL), e2e (real processes and Kafka)
 docs/adr/             Recorded decisions
 ```
@@ -259,13 +350,15 @@ docs/adr/             Recorded decisions
 ## Known limitations
 
 - **Delivery guarantee:** events are delivered at least once and their effects are idempotent. This is not a claim of exactly-once behaviour for the complete workflow.
-- **Single-owner throughput:** one publisher and one matcher do the work, and the matcher handles all partitions in one serial loop. A standby takes over but does not share the load, and a blocked event stops every symbol in the matcher.
+- **Single-owner throughput:** one publisher, one matcher and one notification worker do the work, and the matcher and the worker are serial. A standby takes over but does not share the load, a blocked event stops every symbol in the matcher, and an unresponsive destination costs the worker a full timeout per due job.
+- **Notifications:** they are not ordered among themselves, can arrive before the order is matched, and rely on a real destination remembering keys for longer than the retry budget. First start notifies every order still retained in the topic. See [ADR 0003](docs/adr/0003-phase-3-external-notifications.md#consequences).
+- **Mock destination:** `/__control` has no authentication, and `mock-api` is for local use only. A real destination is not part of this project.
 - **Retention and recovery:** Kafka keeps events for 30 days. Beyond that, or after losing Kafka's data, an operator republishes unapplied events from the Outbox by following [ADR 0002](docs/adr/0002-phase-2-messaging-and-matching.md#operator-procedures).
 - **Local single broker:** one Kafka broker with a replication factor of 1, so an acknowledged event is on one machine only. A real deployment needs more.
-- **No backlog limit is enforced:** during a Kafka outage, acceptance is limited only by PostgreSQL's disk, and nothing reports the backlog. Phase 4 adds that visibility.
+- **No backlog limit is enforced:** during a Kafka outage, acceptance is limited only by PostgreSQL's disk, and nothing reports the backlog, `FAILED` jobs or quarantined messages except an error log and a query. Phase 4 adds that visibility.
 - **Kafka versions:** the client declares support for Kafka 3.5.0 to 4.2.0. The image is the 4.2.2 patch of that line, and only that version has been run.
 - **Demo identity:** there is no authentication. Every request shares the fixed scope `demo`.
 - **Immutable market scales:** changing the scale of a market that has orders would misread stored amounts and stop old keys replaying.
 - **Keys are kept forever:** by agreed decision, key mappings are never deleted automatically, so the table grows with every order.
-- **Simple operations:** there are no health endpoints or lag metrics yet. The Compose check only proves the API's port is open, and the publisher and matcher have no check beyond running. Shutdown waits for in-flight work without its own deadline, and relies on the supervisor's `SIGKILL`, which is safe because durable records drive replay. Phase 4 completes these.
+- **Simple operations:** there are no health endpoints or lag metrics yet. The Compose check only proves that the API's and the mock's ports are open, and the publisher, matcher and external role have no check beyond running. Shutdown waits for in-flight work without its own deadline, and relies on the supervisor's `SIGKILL`, which is safe because durable records drive replay. Phase 4 completes these.
 - **Local PostgreSQL:** one instance with no replication and passwordless access on the loopback interface, for local use only.

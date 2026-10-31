@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   loadConfig,
+  loadExternalConfig,
   loadKafkaConfig,
   loadMatchingConfig,
   loadPublisherConfig,
@@ -94,5 +95,45 @@ describe('loadMatchingConfig', () => {
     expect(() =>
       loadMatchingConfig({ DATABASE_URL, MATCHING_SESSION_TIMEOUT_MS: '5999' }),
     ).toThrow('MATCHING_SESSION_TIMEOUT_MS');
+  });
+});
+
+describe('loadExternalConfig', () => {
+  it('applies the documented defaults, including the agreed consumer group', () => {
+    expect(loadExternalConfig({ DATABASE_URL })).toMatchObject({
+      databaseUrl: DATABASE_URL,
+      groupId: 'external-notification-v1',
+      sessionTimeoutMs: 10_000,
+      restartDelayMs: 1_000,
+      targetUrl: 'http://127.0.0.1:58080/v1/notifications',
+      timeoutMs: 5_000,
+      pollIntervalMs: 500,
+      retry: { baseMs: 1_000, capMs: 300_000, jitterPercent: 50, maxAttempts: 400 },
+    });
+  });
+
+  it('requires DATABASE_URL', () => {
+    expect(() => loadExternalConfig({})).toThrow('DATABASE_URL is required');
+  });
+
+  it.each([
+    ['EXTERNAL_API_URL', 'not a url'],
+    ['EXTERNAL_SESSION_TIMEOUT_MS', '5999'],
+    ['EXTERNAL_RESTART_DELAY_MS', '0'],
+    ['EXTERNAL_TIMEOUT_MS', '0'],
+    ['EXTERNAL_POLL_INTERVAL_MS', '0'],
+    ['EXTERNAL_RETRY_BASE_MS', '0'],
+    ['EXTERNAL_RETRY_CAP_MS', '0'],
+    ['EXTERNAL_RETRY_JITTER_PERCENT', '-1'],
+    ['EXTERNAL_RETRY_JITTER_PERCENT', '101'],
+    ['EXTERNAL_MAX_ATTEMPTS', '0'],
+  ])('rejects %s=%s', (name, value) => {
+    expect(() => loadExternalConfig({ DATABASE_URL, [name]: value })).toThrow(name);
+  });
+
+  it.each(['0', '100'])('accepts a jitter of %s percent', (value) => {
+    const config = loadExternalConfig({ DATABASE_URL, EXTERNAL_RETRY_JITTER_PERCENT: value });
+
+    expect(config.retry.jitterPercent).toBe(Number(value));
   });
 });

@@ -5,3 +5,5 @@
 !tsconfig.build.json
 !src/
 !migrations/
+!mock-api/
+!tsconfig.mock.json
