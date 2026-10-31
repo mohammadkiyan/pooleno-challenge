@@ -1,6 +1,6 @@
 # ADR 0001: Phase 1 tooling and open choices
 
-- **Status:** accepted for Phase 1, pending the Phase 1 review
+- **Status:** accepted; Phase 1 was reviewed and approved on 2026-10-31
 - **Date:** 2026-10-31
 
 ## Context
@@ -13,7 +13,7 @@ The repository was empty, so there were no existing conventions to reuse. The ha
 - retry and time budgets
 - Kafka client and balanced-tree implementation
 
-This ADR settles the first four. The Kafka client and the balanced tree are not needed yet, so Phase 2 decides them against the versions available then.
+This ADR settles the first four. [ADR 0002](0002-phase-2-messaging-and-matching.md) settles the Kafka client and the balanced tree.
 
 ## Decision: versions
 
