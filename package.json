@@ -1,0 +1,38 @@
+{
+  "name": "pooleno-order-processing",
+  "version": "0.1.0",
+  "description": "Reliable asynchronous order processing: durable order acceptance over Fastify and PostgreSQL.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/entrypoints/api.ts",
+    "migrate": "tsx --env-file=.env src/entrypoints/migrate.ts",
+    "demo": "tsx scripts/demo.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node --env-file=.env dist/entrypoints/api.js",
+    "typecheck": "tsc",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "check": "npm run typecheck && npm run lint && npm test"
+  },
+  "dependencies": {
+    "@fastify/type-provider-typebox": "6.3.0",
+    "fastify": "5.12.7",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "typebox": "1.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "eslint": "10.14.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.0.5"
+  }
+}
