@@ -1,7 +1,7 @@
 {
   "name": "pooleno-order-processing",
   "version": "0.1.0",
-  "description": "Reliable asynchronous order processing: durable order acceptance over Fastify and PostgreSQL.",
+  "description": "Reliable asynchronous order processing: durable acceptance, an ordered Outbox to Kafka and a deterministic matching consumer.",
   "private": true,
   "type": "module",
   "engines": {
@@ -17,13 +17,18 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "kafka:init": "tsx --env-file=.env src/entrypoints/init-kafka.ts",
+    "dev:publisher": "tsx watch --env-file=.env src/entrypoints/publisher.ts",
+    "dev:matching": "tsx watch --env-file=.env src/entrypoints/matching.ts"
   },
   "dependencies": {
     "@fastify/type-provider-typebox": "6.3.0",
+    "@platformatic/kafka": "2.14.0",
     "fastify": "5.12.7",
     "pg": "8.23.1",
     "pino": "10.4.0",
+    "sorted-btree": "2.1.0",
     "typebox": "1.4.3"
   },
   "devDependencies": {
