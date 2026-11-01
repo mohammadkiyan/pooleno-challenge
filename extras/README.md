@@ -27,6 +27,12 @@ npm run dev
 
 Open [the scenario viewer](http://127.0.0.1:5173). Click a scenario to start its illustration, or use **Run scenario** for the initially selected one. Pause, resume, move between steps, change playback speed, and replay without backend setup. Reduced-motion preferences are respected.
 
+The canvas supports scroll-to-zoom, background dragging to pan, and zoom/fit buttons. Focus the canvas for keyboard controls: `+` / `-` zoom, `0` fits, and arrow keys pan. Green identifies current work, dashed blue identifies the next step, and purple identifies explicitly parallel branches. Request paths are solid green; response paths are dashed blue. The compact scenario strip replaces the tall sidebar.
+
+**View 1** shows the system overview. Check **View 2 · Show internals** to expand the system diagram into Order API and Matching subflows. Each component can be collapsed independently. A moving marker follows the explanatory internal steps during playback. Hover, keyboard-focus, or tap a step for its description; Escape dismisses it. Switching views preserves playback; the internal phases are authored explanations, not captured backend spans.
+
+Each journey starts with a labeled client request. Preconditions identify any orders already resting in the book. The current request, decision, and implementing source path are shown at each step. Both views use that same sequence; the internal diagram has no separate playback clock. Retries explicitly resume at their owner: the client for a repeated order request, the Outbox for publication, or the notification worker for delivery. The committed book stays unchanged during match computation and updates after commit.
+
 ```bash
 npm test
 npm run build

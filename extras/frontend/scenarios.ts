@@ -7,32 +7,44 @@ export type NodeId =
   | "matching"
   | "worker"
   | "external";
-
+export type PhaseId =
+  | "api-validate"
+  | "api-key"
+  | "api-save"
+  | "api-reply"
+  | "match-guard"
+  | "match-price"
+  | "match-fill"
+  | "match-save"
+  | "match-book";
 export interface BookOrder {
   id: string;
   side: "BUY" | "SELL";
   price: string;
   quantity: string;
 }
-
 export interface Trade {
   maker: string;
   price: string;
   quantity: string;
 }
-
 export interface Frame {
   title: string;
   detail: string;
   active: NodeId[];
   blocked: NodeId[];
+  parallel: NodeId[];
   book: BookOrder[];
   trades: Trade[];
   facts: [string, string][];
   request: string;
   response: string;
+  requestLabel: string;
+  decision: string;
+  source: string;
+  phase: PhaseId | null;
+  transfers: [NodeId, NodeId][];
 }
-
 export interface Scenario {
   id: string;
   title: string;
@@ -44,608 +56,630 @@ export interface Scenario {
   tags: string[];
   frames: Frame[];
 }
-
-function step(
-  title: string,
-  detail: string,
-  active: NodeId[],
-  state: Partial<Frame> = {},
-): Frame {
-  return {
-    title,
-    detail,
-    active,
-    blocked: [],
-    book: [],
-    trades: [],
-    facts: [],
-    request: "No request shown for this step.",
-    response: "Run the illustration to follow the expected behavior.",
-    ...state,
-  };
-}
-
-const s1: BookOrder = {
-  id: "S1",
+const api = "src/modules/orders/";
+const match = "src/modules/matching/";
+const messaging = "src/modules/messaging/";
+const external = "src/modules/external/";
+const fixture: BookOrder[] = [
+  { id: "S3", side: "SELL", price: "99.00", quantity: "1.0000" },
+  { id: "S1", side: "SELL", price: "100.00", quantity: "2.0000" },
+  { id: "S2", side: "SELL", price: "100.00", quantity: "3.0000" },
+];
+const remainder: BookOrder = {
+  id: "S2",
   side: "SELL",
   price: "100.00",
   quantity: "2.0000",
 };
-const s2: BookOrder = {
-  id: "S2",
-  side: "SELL",
-  price: "100.00",
-  quantity: "3.0000",
-};
-const s3: BookOrder = {
-  id: "S3",
-  side: "SELL",
-  price: "99.00",
-  quantity: "1.0000",
-};
-const remainder: BookOrder = { ...s2, quantity: "2.0000" };
-const fixture = [s3, s1, s2];
 const trades: Trade[] = [
   { maker: "S3", price: "99.00", quantity: "1.0000" },
   { maker: "S1", price: "100.00", quantity: "2.0000" },
   { maker: "S2", price: "100.00", quantity: "1.0000" },
 ];
-const sellRequest = JSON.stringify(
-  {
-    symbol: "ETH-USD",
-    side: "SELL",
-    type: "LIMIT",
-    price: "200.00",
-    quantity: "1",
-  },
-  null,
-  2,
-);
-const receipt = '202 Accepted\n{ "orderId": "order-A", "status": "QUEUED" }';
-const notifyFacts: [string, string][] = [
-  ["Delivery attempts", "1"],
-  ["Destination effects", "1"],
-];
 
-/** Authored illustrations of expected behavior. These are not captured backend runs. */
+// Authoring helpers preserve the last committed state; they do not execute backend logic.
+function next(
+  frames: Frame[],
+  title: string,
+  detail: string,
+  active: NodeId[],
+  decision: string,
+  source: string,
+  changes: Partial<Frame> = {},
+) {
+  const previous = frames.at(-1);
+  if (!previous) throw new Error("A journey must start with a request");
+  frames.push({
+    ...previous,
+    title,
+    detail,
+    active,
+    decision,
+    source,
+    phase: null,
+    parallel: [],
+    transfers: [],
+    response: "",
+    ...changes,
+  });
+}
+function accept(
+  orderId: string,
+  side: "BUY" | "SELL",
+  price: string,
+  quantity: string,
+  precondition: string,
+  book: BookOrder[] = [],
+  blocked: NodeId[] = [],
+) {
+  const key = `demo-${orderId.toLowerCase()}-request-0001`;
+  const request =
+    `POST /v1/orders\nIdempotency-Key: ${key}\n\n` +
+    JSON.stringify(
+      { symbol: "ETH-USD", side, type: "LIMIT", price, quantity },
+      null,
+      2,
+    );
+  const receipt = `202 Accepted\n{ "orderId": "${orderId}", "status": "QUEUED" }`;
+  const frames: Frame[] = [
+    {
+      title: `Client submits ${orderId}`,
+      detail: precondition,
+      active: ["client"],
+      blocked,
+      parallel: [],
+      book,
+      trades: [],
+      facts: [
+        ["Order", `${side} ${quantity} ETH`],
+        ["Limit", `${price} USD`],
+      ],
+      request,
+      response: "Not accepted yet.",
+      requestLabel: `R1 · ${orderId} · ${side} ${quantity} @ ${price}`,
+      decision: "A new order intention gets its own idempotency key.",
+      source: api + "order.routes.ts → POST /v1/orders",
+      phase: null,
+      transfers: [],
+    },
+  ];
+  next(
+    frames,
+    "Validate the incoming request",
+    "The API validates headers and the body, checks the market, and converts decimal strings into exact integer units. This valid request passes.",
+    ["client", "api"],
+    "Valid price and quantity → continue; malformed or off-increment input would return 400.",
+    api + "canonicalize-order.ts → canonicalizeOrder",
+    { phase: "api-validate", transfers: [["client", "api"]] },
+  );
+  next(
+    frames,
+    "Claim the request key",
+    "Fingerprint the normalized request and scope. In the acceptance transaction, claim this previously unused key.",
+    ["api", "database"],
+    "Unused key → create a new acceptance; an existing key would compare fingerprints.",
+    api + "accept-order.ts → claimKey",
+    { phase: "api-key", transfers: [["api", "database"]] },
+  );
+  next(
+    frames,
+    "Commit acceptance atomically",
+    "Advance the symbol sequence and save the order, receipt and Outbox event together. PostgreSQL commits all of them or rolls everything back.",
+    ["api", "database"],
+    "Commit succeeds → it is safe to acknowledge the order.",
+    api + "accept-order.ts → withTransaction",
+    {
+      phase: "api-save",
+      transfers: [["api", "database"]],
+      response: "COMMIT: order + receipt + sequence + Outbox event",
+    },
+  );
+  next(
+    frames,
+    "Return 202 to the client",
+    "The saved receipt returns to the caller. This confirms durable acceptance, not matching or notification. Async publication can start any time after commit; this is one illustrative interleaving.",
+    ["api", "client"],
+    "Return the receipt after commit; Kafka availability is not required.",
+    api + "order.routes.ts → reply.code(status)",
+    { phase: "api-reply", transfers: [["api", "client"]], response: receipt },
+  );
+  return frames;
+}
+function publish(frames: Frame[]) {
+  next(
+    frames,
+    "Read the earliest pending event",
+    "The publisher selects the earliest unpublished event for this symbol from the database-backed Outbox.",
+    ["database", "outbox"],
+    "Preserve per-symbol order; do not skip an earlier pending event.",
+    messaging + "publish-outbox.ts",
+    { transfers: [["database", "outbox"]] },
+  );
+  next(
+    frames,
+    "Publish to Kafka, then mark sent",
+    "Send the stored event keyed by symbol. Only after broker acknowledgement mark the Outbox row published.",
+    ["outbox", "kafka"],
+    "Broker acknowledges → mark published; an uncertain send may replay the same event.",
+    messaging + "publish-outbox.ts",
+    { transfers: [["outbox", "kafka"]] },
+  );
+}
+function guard(frames: Frame[]) {
+  next(
+    frames,
+    "Dispatch to independent consumer groups",
+    "Matching and notification receive the acceptance independently. Either branch may finish first. This walkthrough follows matching next.",
+    ["kafka", "matching", "worker"],
+    "Separate groups → a notification failure does not block matching.",
+    messaging + "matching-consumer.ts",
+    {
+      parallel: ["matching", "worker"],
+      transfers: [
+        ["kafka", "matching"],
+        ["kafka", "worker"],
+      ],
+    },
+  );
+  next(
+    frames,
+    "Deduplicate and check the sequence",
+    "The matching transaction claims its Inbox event, locks progress, and checks the next acceptance sequence and the in-memory cursor.",
+    ["matching", "database"],
+    "Unseen event + next sequence → compute. A handled event is a no-op; a gap blocks.",
+    match + "apply-accepted-order.ts",
+    { phase: "match-guard", transfers: [["matching", "database"]] },
+  );
+}
+function finishRest(frames: Frame[], order: BookOrder) {
+  next(
+    frames,
+    "Commit the open order",
+    "Persist the open order, Inbox and matching progress atomically. The in-memory book still represents the preceding committed state.",
+    ["matching", "database"],
+    "No executable maker → persist OPEN with its full remainder.",
+    match + "apply-accepted-order.ts → persistMatch",
+    { phase: "match-save", transfers: [["matching", "database"]] },
+  );
+  const before = frames.at(-1)!.book;
+  next(
+    frames,
+    "Rest the order and advance the offset",
+    "After the database commit, add the remainder to the in-memory book at its own limit. The consumer may then advance its offset.",
+    ["matching"],
+    "Rest the remaining quantity; never trade outside the limit.",
+    match + "matching-engine.ts → applyMatch",
+    {
+      phase: "match-book",
+      book: [...before, order],
+      facts: [
+        ["Order status", "OPEN"],
+        ["Trades", "0"],
+      ],
+    },
+  );
+}
+
+const matching = accept(
+  "B1",
+  "BUY",
+  "100",
+  "4",
+  "Precondition: S1 and S2 were accepted and matched earlier at 100, in that order. Later S3 rested at 99. We now follow B1 from the client.",
+  fixture,
+);
+publish(matching);
+guard(matching);
+next(
+  matching,
+  "Compare the best ask with B1’s limit",
+  "The best ask is S3 at 99, below B1’s limit of 100. Price priority wins even though S3 arrived last.",
+  ["matching"],
+  "99 ≤ 100 → crossing is allowed; start with S3.",
+  match + "matching-engine.ts → crosses",
+  { phase: "match-price" },
+);
+next(
+  matching,
+  "Compute S3’s fill at 99",
+  "Take min(4, 1) = 1 ETH from S3. B1 has 3 left to match. This is a computation plan; the committed book below has not changed.",
+  ["matching"],
+  "Best price first → 1 ETH executes at the maker’s price of 99.",
+  match + "matching-engine.ts → matchOrder",
+  {
+    phase: "match-fill",
+    facts: [
+      ["Planned fill", "S3 · 1 @ 99"],
+      ["B1 left to match", "3.0000"],
+    ],
+  },
+);
+next(
+  matching,
+  "Compute FIFO fills at 100",
+  "At 100, S1 is older than S2. Plan 2 ETH from S1, then 1 ETH from S2. B1 is fully matched; S2 will have 2 left.",
+  ["matching"],
+  "Same price → FIFO. Fill only the smaller remaining quantity.",
+  match + "matching-engine.ts → matchOrder",
+  {
+    phase: "match-fill",
+    facts: [
+      ["Planned fills", "S1: 2 · S2: 1"],
+      ["S2 planned remainder", "2.0000"],
+    ],
+  },
+);
+next(
+  matching,
+  "Commit the match and keep the remainder",
+  "Commit all three trades, maker/taker updates, Inbox and progress together. The RAM book is applied only after this transaction succeeds.",
+  ["matching", "database"],
+  "Atomic commit → no partially persisted match.",
+  match + "apply-accepted-order.ts → persistMatch",
+  { phase: "match-save", trades, transfers: [["matching", "database"]] },
+);
+next(
+  matching,
+  "Apply committed fills, then advance the offset",
+  "Update the book after commit. S2 retains its original FIFO position with 2 ETH. Only after durable work and the book update can the consumer commit its Kafka offset.",
+  ["matching"],
+  "Keep S2’s queue position; no second trade on event redelivery.",
+  match + "matching-engine.ts → applyMatch",
+  {
+    phase: "match-book",
+    book: [remainder],
+    trades,
+    facts: [
+      ["B1 status", "FILLED"],
+      ["S2 remaining", "2.0000"],
+    ],
+    response:
+      "B1: FILLED\nS2: PARTIALLY_FILLED\nTrades: 1 @ 99, 2 @ 100, 1 @ 100",
+  },
+);
+
+const nonCross = accept(
+  "B1",
+  "BUY",
+  "100",
+  "1",
+  "Precondition: a previously accepted sell order S1 is already resting at 101. Follow the new buy request B1.",
+  [{ id: "S1", side: "SELL", price: "101.00", quantity: "2.0000" }],
+);
+publish(nonCross);
+guard(nonCross);
+next(
+  nonCross,
+  "The matcher checks the boundary",
+  "The best ask is 101; B1 will pay at most 100. No maker can execute.",
+  ["matching"],
+  "101 > 100 → stop; never cross this price boundary.",
+  match + "matching-engine.ts → crosses",
+  {
+    phase: "match-price",
+    facts: [
+      ["Comparison", "101 > 100"],
+      ["Trades", "0"],
+    ],
+  },
+);
+finishRest(nonCross, {
+  id: "B1",
+  side: "BUY",
+  price: "100.00",
+  quantity: "1.0000",
+});
+
+function retry(conflict: boolean) {
+  const frames = accept(
+    "order-A",
+    "SELL",
+    "200",
+    "1",
+    "Precondition: this key has never been accepted. We first follow R1, then a second client request under the same key.",
+  );
+  next(
+    frames,
+    conflict
+      ? "Client changes the quantity"
+      : "Client retries the same intention",
+    conflict
+      ? "R2 asks for 2 ETH under R1’s key. This is a new HTTP request, not a new accepted order."
+      : "R2 resends the same key with equivalent decimal spelling. This is a new HTTP request for the same order intention.",
+    ["client"],
+    "Retry must re-enter through validation; no silent updates to accepted orders.",
+    api + "order.routes.ts",
+    {
+      requestLabel: conflict ? "R2 · changed order" : "R2 · retry same order",
+      request: frames[0]!.request.replace(
+        '"quantity": "1"',
+        conflict ? '"quantity": "2"' : '"quantity": "1.0000"',
+      ),
+      facts: [
+        ["HTTP requests", "2"],
+        ["Accepted orders", "1"],
+      ],
+    },
+  );
+  next(
+    frames,
+    "Validate the second request",
+    "The retry is structurally valid and is normalized before fingerprint comparison.",
+    ["client", "api"],
+    "Valid request → compare its normalized meaning.",
+    api + "canonicalize-order.ts",
+    { phase: "api-validate", transfers: [["client", "api"]] },
+  );
+  next(
+    frames,
+    "Compare the saved fingerprint",
+    conflict
+      ? "The key exists but the quantity changes its normalized meaning."
+      : "The key exists and the normalized meaning matches R1.",
+    ["api", "database"],
+    conflict
+      ? "Different fingerprint → reject; do not write a new order or event."
+      : "Same fingerprint → load the exact saved receipt; skip new acceptance.",
+    api + "accept-order.ts → replayReceipt",
+    { phase: "api-key", transfers: [["api", "database"]] },
+  );
+  next(
+    frames,
+    conflict
+      ? "Reject the changed request with 422"
+      : "Replay the original receipt",
+    conflict
+      ? "Return IDEMPOTENCY_KEY_REUSED. The original order and receipt remain unchanged."
+      : "Return R1’s exact original 202 receipt, even if the order has since progressed. No new order or acceptance event is created.",
+    ["api", "client"],
+    conflict
+      ? "422: preserve original intention."
+      : "Replay receipt: no second acceptance.",
+    api + "accept-order.ts → replayReceipt",
+    {
+      phase: "api-reply",
+      transfers: [["api", "client"]],
+      response: conflict
+        ? '422 Unprocessable Entity\n{ "code": "IDEMPOTENCY_KEY_REUSED" }'
+        : '202 Accepted\n{ "orderId": "order-A", "status": "QUEUED" }',
+      facts: [
+        ["HTTP requests", "2"],
+        ["Orders / events", "1 / 1"],
+      ],
+    },
+  );
+  return frames;
+}
+const lost = accept(
+  "S1",
+  "SELL",
+  "200",
+  "1",
+  "Precondition: the demo destination is configured to apply its next notification and then drop the response. Follow the new order request S1.",
+);
+publish(lost);
+next(
+  lost,
+  "Hand off to notification processing",
+  "The external consumer receives the acceptance event independently of matching and saves an Inbox entry and durable delivery job.",
+  ["kafka", "worker", "database"],
+  "Persist the job before advancing this consumer’s offset.",
+  external + "schedule-notification.ts",
+  { transfers: [["kafka", "worker"]] },
+);
+next(
+  lost,
+  "Send the notification",
+  "The worker sends the job under external-notify:event-A. The destination stores one effect and its replay result.",
+  ["worker", "external"],
+  "Use a stable destination key for all attempts of this job.",
+  external + "external-client.ts",
+  {
+    requestLabel: "N1 · notification for S1",
+    request: "POST /v1/notifications\nIdempotency-Key: external-notify:event-A",
+    transfers: [["worker", "external"]],
+    facts: [
+      ["Delivery attempts", "1"],
+      ["Destination effects", "1"],
+    ],
+  },
+);
+next(
+  lost,
+  "The response never arrives",
+  "The effect exists remotely, but the worker cannot confirm it. Store a retry due time and leave the job pending. Matching can continue independently.",
+  ["worker", "database"],
+  "Unknown remote outcome → retry the same job and key; do not assume it failed remotely.",
+  external + "notification-worker.ts",
+  {
+    blocked: ["external"],
+    response: "Connection closed; local outcome uncertain",
+  },
+);
+next(
+  lost,
+  "Retry with the original key",
+  "When due, the worker retries the same payload and key. The destination replays its stored result without applying another effect.",
+  ["worker", "external"],
+  "Retry starts at the worker, not the client or Kafka.",
+  external + "notification-worker.ts",
+  {
+    blocked: [],
+    transfers: [["worker", "external"]],
+    facts: [
+      ["Delivery attempts", "2"],
+      ["Destination effects", "1"],
+    ],
+    response: "200 OK\nidempotent-replayed: true",
+  },
+);
+next(
+  lost,
+  "Destination returns the saved result",
+  "The destination returns its saved success response without applying another effect. This response travels back to the notification worker.",
+  ["external", "worker"],
+  "Acknowledge the original effect; do not create another one.",
+  external + "external-client.ts",
+  {
+    transfers: [["external", "worker"]],
+    response: "200 OK\nidempotent-replayed: true",
+  },
+);
+next(
+  lost,
+  "Record successful delivery",
+  "After receiving confirmation, mark the durable job SUCCEEDED. A local Inbox alone could not resolve the lost-response gap; destination idempotency did.",
+  ["worker", "database"],
+  "Two attempts, one effect → delivery confirmed.",
+  external + "external-job.repository.ts → markJobSucceeded",
+  {
+    facts: [
+      ["Delivery attempts", "2"],
+      ["Destination effects", "1"],
+    ],
+    response: "Job: SUCCEEDED\nDestination effects: 1",
+  },
+);
+
+const outage = accept(
+  "S1",
+  "SELL",
+  "200",
+  "1",
+  "Precondition: Kafka is offline; PostgreSQL and the API are available. Follow a new non-crossing sell request. ",
+  [],
+  ["kafka"],
+);
+next(
+  outage,
+  "Read pending work during the outage",
+  "The publisher finds the committed event in the Outbox. Acceptance has already returned 202.",
+  ["database", "outbox"],
+  "Database work is durable even though Kafka is unavailable.",
+  messaging + "publish-outbox.ts",
+  { transfers: [["database", "outbox"]] },
+);
+next(
+  outage,
+  "Publication cannot reach Kafka",
+  "The publisher’s send fails. Keep the event pending, record the retry, and hold back later events for this symbol.",
+  ["outbox"],
+  "Send failure → retain and retry; never mark the event published.",
+  messaging + "publish-outbox.ts",
+  {
+    facts: [
+      ["Order status", "QUEUED"],
+      ["Pending events", "1"],
+    ],
+  },
+);
+next(
+  outage,
+  "Kafka recovers; retry publication",
+  "The earliest pending event is resent. Broker acknowledgement now permits the publisher to mark it published.",
+  ["outbox", "kafka"],
+  "Retry starts at the Outbox; no second client order is needed.",
+  messaging + "publish-outbox.ts",
+  { blocked: [], transfers: [["outbox", "kafka"]] },
+);
+guard(outage);
+next(
+  outage,
+  "No opposing maker exists",
+  "The restored book has no executable buy for S1. The full quantity must rest at its own limit.",
+  ["matching"],
+  "No crossing liquidity → OPEN, not a rejected order.",
+  match + "matching-engine.ts → matchOrder",
+  { phase: "match-price" },
+);
+finishRest(outage, {
+  id: "S1",
+  side: "SELL",
+  price: "200.00",
+  quantity: "1.0000",
+});
+
 export const scenarios: [Scenario, ...Scenario[]] = [
   {
     id: "matching",
     title: "Price, time & partial fills",
-    subtitle: "The matching engine, step by step",
+    subtitle: "Follow B1 through matching",
     category: "Matching",
     description:
-      "Watch a buy order sweep the best ask, respect FIFO at the next price, and leave a maker partially filled.",
+      "Follow B1 from the client through acceptance, publication, price/FIFO decisions and committed fills.",
     guarantee:
       "Best price first. Oldest at that price next. Trades execute at the maker’s price.",
     outcome:
       "B1 fills 4 ETH in three trades. S2 keeps its queue position with 2 ETH remaining.",
     tags: ["Price priority", "FIFO", "Partial execution"],
-    frames: [
-      step(
-        "Start with an empty book",
-        "Three sell orders will arrive before a buy order crosses them. All amounts below use ETH-USD.",
-        [],
-        {
-          facts: [
-            ["Resting orders", "0"],
-            ["Trades", "0"],
-          ],
-        },
-      ),
-      step(
-        "S1 is first at 100",
-        "After acceptance and matching, sell order S1 rests with a quantity of 2 ETH.",
-        ["matching"],
-        {
-          book: [s1],
-          facts: [
-            ["Resting orders", "1"],
-            ["Trades", "0"],
-          ],
-        },
-      ),
-      step(
-        "S2 queues behind S1",
-        "S2 offers 3 ETH at the same price. Arrival order puts it behind S1.",
-        ["matching"],
-        {
-          book: [s1, s2],
-          facts: [
-            ["At price 100", "S1 → S2"],
-            ["Trades", "0"],
-          ],
-        },
-      ),
-      step(
-        "S3 offers a better price",
-        "S3 arrives later, but its price of 99 has priority over both orders at 100.",
-        ["matching"],
-        {
-          book: fixture,
-          facts: [
-            ["Best ask", "99.00"],
-            ["Priority", "S3 → S1 → S2"],
-          ],
-        },
-      ),
-      step(
-        "B1 is accepted durably",
-        "The API commits B1 and its Outbox event together. A 202 response confirms acceptance; the order has not necessarily matched yet.",
-        ["api", "database", "outbox"],
-        {
-          book: fixture,
-          request:
-            'POST /v1/orders\n\n{ "symbol": "ETH-USD", "side": "BUY",\n  "type": "LIMIT", "price": "100", "quantity": "4" }',
-          response: '202 Accepted\n{ "orderId": "B1", "status": "QUEUED" }',
-          facts: [
-            ["B1 quantity", "4.0000"],
-            ["Limit price", "100.00"],
-          ],
-        },
-      ),
-      step(
-        "Kafka feeds two independent branches",
-        "Matching and notification consume the acceptance event independently. Either branch may finish first.",
-        ["kafka", "matching", "worker"],
-        {
-          book: fixture,
-          facts: [
-            ["Matching", "Computing"],
-            ["Notification", "Independent"],
-          ],
-        },
-      ),
-      step(
-        "Inside the match: best price first",
-        "The computation takes S3’s 1 ETH at 99. This is an explanatory computation step; the trades and order changes will commit together.",
-        ["matching"],
-        {
-          book: [s1, s2],
-          trades: trades.slice(0, 1),
-          facts: [
-            ["B1 left to match", "3.0000"],
-            ["Maker price", "99.00"],
-          ],
-        },
-      ),
-      step(
-        "Inside the match: oldest at 100",
-        "S1 arrived before S2, so its full 2 ETH executes next at 100.",
-        ["matching"],
-        {
-          book: [s2],
-          trades: trades.slice(0, 2),
-          facts: [
-            ["B1 left to match", "1.0000"],
-            ["FIFO winner", "S1"],
-          ],
-        },
-      ),
-      step(
-        "Commit the match and keep the remainder",
-        "B1 takes 1 ETH from S2. All three trades, order updates, and matching progress commit atomically. S2 remains first at 100.",
-        ["database", "matching"],
-        {
-          book: [remainder],
-          trades,
-          facts: [
-            ["B1 status", "FILLED"],
-            ["S2 remaining", "2.0000"],
-          ],
-          response:
-            "Expected persisted result\nB1: FILLED, remaining 0\nS2: PARTIALLY_FILLED, remaining 2\nTrades: 1 @ 99, 2 @ 100, 1 @ 100",
-        },
-      ),
-    ],
+    frames: matching,
   },
   {
     id: "non-crossing",
     title: "Prices that never cross",
-    subtitle: "A valid order does not need a trade",
+    subtitle: "A valid order need not trade",
     category: "Matching",
     description:
-      "A buyer offers 100 while a seller asks 101. Both orders are valid, but neither may trade outside its limit.",
-    guarantee:
-      "A buy trades only at or below its limit. A sell trades only at or above its limit.",
+      "Follow a buy at 100 while a preloaded seller asks 101. See exactly why the order rests.",
+    guarantee: "Buy only at or below the limit; sell only at or above it.",
     outcome:
       "Both orders stay OPEN. The spread is 1.00 and no trade is created.",
     tags: ["Limit boundary", "No execution"],
-    frames: [
-      step(
-        "Two limits, one gap",
-        "A seller asks 101 and a buyer will pay at most 100.",
-        [],
-        {
-          facts: [
-            ["Sell limit", "101.00"],
-            ["Buy limit", "100.00"],
-          ],
-        },
-      ),
-      step(
-        "The seller rests at 101",
-        "S1 enters the book without an opposing buyer.",
-        ["matching"],
-        { book: [{ ...s1, price: "101.00" }], facts: [["S1 status", "OPEN"]] },
-      ),
-      step(
-        "The buyer is accepted",
-        "A valid buy order is accepted even when it cannot execute immediately.",
-        ["api", "database", "outbox"],
-        {
-          book: [{ ...s1, price: "101.00" }],
-          response: receipt,
-          facts: [["B1 limit", "100.00"]],
-        },
-      ),
-      step(
-        "The matcher checks the boundary",
-        "The best ask, 101, exceeds the buyer’s limit of 100. The matcher cannot cross.",
-        ["matching"],
-        {
-          book: [
-            { ...s1, price: "101.00" },
-            { id: "B1", side: "BUY", price: "100.00", quantity: "1.0000" },
-          ],
-          facts: [
-            ["Comparison", "101 > 100"],
-            ["Trades", "0"],
-          ],
-        },
-      ),
-      step(
-        "Both orders stay open",
-        "The buy rests at 100 and the sell stays at 101. Acceptance succeeded without a trade.",
-        ["database"],
-        {
-          book: [
-            { ...s1, price: "101.00" },
-            { id: "B1", side: "BUY", price: "100.00", quantity: "1.0000" },
-          ],
-          facts: [
-            ["Spread", "1.00"],
-            ["Trades", "0"],
-          ],
-          response: "Expected persisted result\nS1: OPEN\nB1: OPEN\nTrades: []",
-        },
-      ),
-    ],
+    frames: nonCross,
   },
   {
     id: "duplicate",
     title: "One order, two requests",
-    subtitle: "Safe retries with an idempotency key",
+    subtitle: "Follow acceptance, then a retry",
     category: "Reliability",
     description:
-      "Send the same order twice under the same key. The second request should return the original acceptance receipt.",
-    guarantee:
-      "The same key and the same request meaning identify the same order.",
+      "Follow R1’s acceptance, then R2’s client retry under the same key and meaning.",
+    guarantee: "Same key and normalized meaning replay the original receipt.",
     outcome: "Two HTTP requests resolve to one order and one acceptance event.",
     tags: ["Idempotency", "Safe retry"],
-    frames: [
-      step(
-        "One key identifies one intention",
-        "Both requests will carry the key demo-duplicate-0001 and an equivalent order.",
-        [],
-        {
-          request: "Idempotency-Key: demo-duplicate-0001\n\n" + sellRequest,
-          facts: [
-            ["HTTP requests", "0"],
-            ["Orders", "0"],
-          ],
-        },
-      ),
-      step(
-        "Commit the first acceptance",
-        "The order, fingerprint, receipt, sequence, and Outbox event are saved in one transaction.",
-        ["api", "database", "outbox"],
-        {
-          request: sellRequest,
-          response: receipt,
-          facts: [
-            ["HTTP requests", "1"],
-            ["Orders", "1"],
-          ],
-        },
-      ),
-      step(
-        "The same request arrives again",
-        "A retry carries the original key. Decimal spelling can differ while the order’s meaning stays the same.",
-        ["client", "api"],
-        {
-          request:
-            'Idempotency-Key: demo-duplicate-0001\n\n{ "price": "200", "quantity": "1.0000",\n  "symbol": "ETH-USD", "side": "SELL", "type": "LIMIT" }',
-          facts: [
-            ["HTTP requests", "2"],
-            ["Orders", "1"],
-          ],
-        },
-      ),
-      step(
-        "Find the existing receipt",
-        "The stored fingerprint matches. The API returns the original receipt instead of accepting another order.",
-        ["api", "database"],
-        {
-          response: receipt,
-          facts: [
-            ["Returned order", "order-A"],
-            ["Orders", "1"],
-          ],
-        },
-      ),
-      step(
-        "Two requests. One acceptance.",
-        "The retry creates neither a second order nor another acceptance event. It returns the original QUEUED receipt even if the order has since progressed.",
-        ["database"],
-        {
-          response: receipt,
-          facts: [
-            ["HTTP requests", "2"],
-            ["Orders / events", "1 / 1"],
-          ],
-        },
-      ),
-    ],
+    frames: retry(false),
   },
   {
     id: "conflict",
     title: "Same key, different order",
-    subtitle: "Protect the original intention",
+    subtitle: "Follow a conflicting retry",
     category: "Reliability",
     description:
-      "Reuse an accepted request’s key for a different quantity. The API must reject the change without modifying the original order.",
+      "Follow R1’s acceptance, then see why a changed quantity under the same key returns 422.",
     guarantee:
-      "An idempotency key cannot silently change the meaning of an accepted request.",
+      "An idempotency key cannot change an accepted request’s meaning.",
     outcome:
       "The changed request receives 422. The original order and receipt remain unchanged.",
     tags: ["Conflict detection", "422 response"],
-    frames: [
-      step(
-        "Accept an order for 1 ETH",
-        "The first request establishes the meaning of demo-conflict-0001.",
-        [],
-        {
-          request: "Idempotency-Key: demo-conflict-0001\n\n" + sellRequest,
-          facts: [["Original quantity", "1.0000"]],
-        },
-      ),
-      step(
-        "Store the original receipt",
-        "The order and normalized request fingerprint commit together.",
-        ["api", "database"],
-        {
-          response: receipt,
-          facts: [
-            ["Orders", "1"],
-            ["Original quantity", "1.0000"],
-          ],
-        },
-      ),
-      step(
-        "Change the quantity to 2",
-        "The next request reuses the key but asks to sell twice as much.",
-        ["client", "api"],
-        {
-          request:
-            'Idempotency-Key: demo-conflict-0001\n\n{ "symbol": "ETH-USD", "side": "SELL",\n  "type": "LIMIT", "price": "200", "quantity": "2" }',
-          facts: [
-            ["Stored quantity", "1.0000"],
-            ["Requested quantity", "2.0000"],
-          ],
-        },
-      ),
-      step(
-        "Detect the meaning mismatch",
-        "The key exists, but the request fingerprint differs. The change is rejected.",
-        ["api", "database"],
-        {
-          blocked: ["api"],
-          response:
-            '422 Unprocessable Entity\n{ "code": "IDEMPOTENCY_KEY_REUSED" }',
-          facts: [
-            ["Response", "422"],
-            ["Orders", "1"],
-          ],
-        },
-      ),
-      step(
-        "The original order is intact",
-        "No new order or acceptance event is created. The saved receipt still belongs to the original request.",
-        ["database"],
-        {
-          response:
-            "Expected result\nOriginal quantity: 1 ETH\nOriginal receipt: unchanged\nNew orders: 0",
-          facts: [
-            ["Original quantity", "1.0000"],
-            ["New events", "0"],
-          ],
-        },
-      ),
-    ],
+    frames: retry(true),
   },
   {
     id: "lost-response",
     title: "Delivered. Response lost.",
-    subtitle: "Retry the request, preserve one effect",
+    subtitle: "Follow one uncertain delivery",
     category: "Reliability",
     description:
-      "The destination applies a notification, but its response disappears. Follow the retry that safely resolves the uncertain outcome.",
+      "Follow a new order from the client, then follow its notification through a lost response and safe retry.",
     guarantee:
-      "Every attempt uses the same delivery key, and the destination deduplicates that key.",
+      "Stable delivery keys plus destination deduplication preserve one effect.",
     outcome:
       "Two delivery attempts produce one destination effect. The job eventually succeeds.",
     tags: ["Uncertain outcome", "Destination idempotency"],
-    frames: [
-      step(
-        "Prepare a lost-response fault",
-        "The illustrated destination will commit an effect and drop the connection before replying.",
-        [],
-        {
-          facts: [
-            ["Delivery attempts", "0"],
-            ["Destination effects", "0"],
-          ],
-        },
-      ),
-      step(
-        "Publish the accepted order",
-        "The durable acceptance event reaches Kafka. Matching and notification work proceed independently.",
-        ["kafka", "matching", "worker"],
-        {
-          response: receipt,
-          facts: [
-            ["Order", "Accepted"],
-            ["Notification", "Pending"],
-          ],
-        },
-      ),
-      step(
-        "Send the notification",
-        "The worker uses external-notify:event-A. The destination saves its effect under that key.",
-        ["worker", "external"],
-        {
-          request:
-            "POST /v1/notifications\nIdempotency-Key: external-notify:event-A",
-          facts: notifyFacts,
-        },
-      ),
-      step(
-        "The response never arrives",
-        "The destination has applied the effect, but the worker cannot confirm success. It schedules a durable retry.",
-        ["worker"],
-        {
-          blocked: ["external"],
-          response:
-            "Connection closed before a response\nLocal delivery outcome: uncertain",
-          facts: [
-            ["Delivery attempts", "1"],
-            ["Destination effects", "1"],
-          ],
-        },
-      ),
-      step(
-        "Retry with the original key",
-        "The worker sends the same payload and key. The destination finds its original result and replays it.",
-        ["worker", "external"],
-        {
-          request:
-            "POST /v1/notifications\nIdempotency-Key: external-notify:event-A\n(same payload)",
-          response: "200 OK\nidempotent-replayed: true",
-          facts: [
-            ["Delivery attempts", "2"],
-            ["Destination effects", "1"],
-          ],
-        },
-      ),
-      step(
-        "One effect, confirmed",
-        "The job is marked SUCCEEDED. Destination idempotency closes the gap between a remote success and the local delivery record.",
-        ["database", "external"],
-        {
-          response:
-            "Expected persisted result\nJob: SUCCEEDED\nAttempts: 2\nDestination effects: 1",
-          facts: [
-            ["Delivery attempts", "2"],
-            ["Destination effects", "1"],
-          ],
-        },
-      ),
-    ],
+    frames: lost,
   },
   {
     id: "kafka-outage",
     title: "Kafka pauses. Orders don’t.",
-    subtitle: "Durable acceptance through an outage",
+    subtitle: "Follow accepted work through recovery",
     category: "Reliability",
     description:
-      "Accept an order while Kafka is unavailable, then follow the stored work as publication resumes after recovery.",
+      "Follow a client request while Kafka is offline, then see why the Outbox retry resumes processing safely.",
     guarantee:
-      "A confirmed order survives a broker outage. Publication preserves each symbol’s acceptance order.",
+      "A confirmed order survives the broker outage; publication keeps per-symbol order.",
     outcome:
       "The pending acceptance event publishes after recovery, and the order eventually becomes OPEN.",
     tags: ["Outbox", "Recovery", "Ordering"],
-    frames: [
-      step(
-        "The broker is unavailable",
-        "Kafka is deliberately offline in this illustration. PostgreSQL and the API remain available.",
-        [],
-        {
-          blocked: ["kafka"],
-          facts: [
-            ["Kafka", "Unavailable"],
-            ["API", "Available"],
-          ],
-        },
-      ),
-      step(
-        "Accept and save the order",
-        "The API commits the order and its Outbox event without waiting for Kafka.",
-        ["api", "database", "outbox"],
-        {
-          blocked: ["kafka"],
-          request: sellRequest,
-          response: receipt,
-          facts: [
-            ["Order status", "QUEUED"],
-            ["Pending events", "1"],
-          ],
-        },
-      ),
-      step(
-        "Keep work in the Outbox",
-        "Publication fails and will retry. The event stays durable, and later events for this symbol wait behind it.",
-        ["outbox"],
-        {
-          blocked: ["kafka"],
-          facts: [
-            ["Order status", "QUEUED"],
-            ["Pending events", "1"],
-          ],
-          response:
-            "Expected during outage\nOutbox event: pending\nOrder: durable\nMatching: waiting",
-        },
-      ),
-      step(
-        "Kafka becomes available",
-        "The publisher retries the earliest pending event for this symbol and receives the broker’s acknowledgement.",
-        ["outbox", "kafka"],
-        {
-          facts: [
-            ["Kafka", "Available"],
-            ["Publication", "Acknowledged"],
-          ],
-        },
-      ),
-      step(
-        "Resume independent consumers",
-        "Matching processes the accepted order; notification work can proceed in its own consumer group.",
-        ["kafka", "matching", "worker"],
-        {
-          facts: [
-            ["Matching", "Processing"],
-            ["Notification", "Independent"],
-          ],
-        },
-      ),
-      step(
-        "The accepted order reaches the book",
-        "The non-crossing sell order becomes OPEN. No confirmed order was discarded during the outage.",
-        ["database", "matching"],
-        {
-          book: [
-            { id: "S1", side: "SELL", price: "200.00", quantity: "1.0000" },
-          ],
-          facts: [
-            ["Order status", "OPEN"],
-            ["Pending events", "0"],
-          ],
-          response:
-            "Expected persisted result\nOrder: OPEN\nRemaining: 1 ETH\nOutbox event: published",
-        },
-      ),
-    ],
+    frames: outage,
   },
 ];
-
 export const firstScenario = scenarios[0];

@@ -32,6 +32,9 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { initialPlayback, playbackReducer } from "./playback";
+import { FlowCanvas } from "./FlowCanvas";
+import { nodeState } from "./flow-state";
+import { InternalFlow } from "./InternalFlow";
 import { firstScenario, scenarios } from "./scenarios";
 import type { BookOrder, Frame, NodeId } from "./scenarios";
 
@@ -124,6 +127,7 @@ const edges: {
   path: string;
   x: number[];
   y: number[];
+  localOnly?: boolean;
 }[] = [
   {
     from: "client",
@@ -131,6 +135,13 @@ const edges: {
     path: "M160 65H220",
     x: [160, 220],
     y: [65, 65],
+  },
+  {
+    from: "api",
+    to: "client",
+    path: "M220 84H160",
+    x: [220, 160],
+    y: [84, 84],
   },
   {
     from: "api",
@@ -174,14 +185,39 @@ const edges: {
     x: [420, 220],
     y: [205, 205],
   },
+  {
+    from: "external",
+    to: "worker",
+    path: "M220 225H420",
+    x: [220, 420],
+    y: [225, 225],
+  },
+  {
+    from: "matching",
+    to: "database",
+    path: "M960 205H983V10H490V26",
+    x: [960, 983, 983, 490, 490],
+    y: [205, 205, 10, 10, 26],
+    localOnly: true,
+  },
+  {
+    from: "worker",
+    to: "database",
+    path: "M490 164V105",
+    x: [490, 490],
+    y: [164, 105],
+    localOnly: true,
+  },
 ];
 
 function SystemFlow({
   frame,
   index,
   playing,
+  next,
 }: {
   frame: Frame;
+  next?: Frame;
   index: number;
   playing: boolean;
 }) {
@@ -221,17 +257,23 @@ function SystemFlow({
             frame.blocked.includes(edge.to);
           const active =
             !blocked &&
-            frame.active.includes(edge.from) &&
-            frame.active.includes(edge.to);
+            frame.transfers.some(
+              ([from, to]) => from === edge.from && to === edge.to,
+            );
+          if (edge.localOnly && !active) return null;
+          const response =
+            (edge.from === "api" && edge.to === "client") ||
+            (edge.from === "external" && edge.to === "worker");
           return (
             <g
               key={edge.from + edge.to}
               className={
-                blocked
+                (response ? "edge-response " : "edge-request ") +
+                (blocked
                   ? "edge edge-blocked"
                   : active
                     ? "edge edge-active"
-                    : "edge"
+                    : "edge")
               }
             >
               <path
@@ -256,12 +298,13 @@ function SystemFlow({
         })}
       </svg>
       {nodes.map(({ id, title, subtitle, icon: Icon, x, y }) => {
-        const blocked = frame.blocked.includes(id);
+        const state = nodeState(id, frame, next);
+        const blocked = state === "blocked";
         const active = !blocked && frame.active.includes(id);
         return (
           <div
             key={id}
-            className={`system-node${active ? " node-active" : ""}${blocked ? " node-blocked" : ""}`}
+            className={`system-node node-${state}${active && state === "current" ? " node-active" : ""}`}
             style={{ left: `${x}%`, top: `${y}%` }}
           >
             <div className="node-top">
@@ -270,11 +313,15 @@ function SystemFlow({
             </div>
             <strong>{title}</strong>
             <span>
-              {blocked
-                ? "Unavailable / uncertain"
-                : active
-                  ? "Current step"
-                  : subtitle}
+              {state === "parallel"
+                ? "Parallel branch"
+                : state === "next"
+                  ? "Next step"
+                  : blocked
+                    ? "Unavailable / uncertain"
+                    : active
+                      ? "Current step"
+                      : subtitle}
             </span>
           </div>
         );
@@ -330,6 +377,7 @@ export function App() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [playback, dispatch] = useReducer(playbackReducer, initialPlayback);
   const [speed, setSpeed] = useState(1);
+  const [showInternals, setShowInternals] = useState(false);
   const [tab, setTab] = useState<"explanation" | "request">("explanation");
   const reducedMotion = useReducedMotion();
   const scenario = scenarios[selectedIndex] ?? firstScenario;
@@ -437,17 +485,6 @@ export function App() {
           </aside>
 
           <main id="scenario-content" className="main-content">
-            <div className="page-intro">
-              <div className="eyebrow">
-                <span />
-                ORDER PROCESSING, EXPLAINED
-              </div>
-              <h1>The backend, in motion.</h1>
-              <p>
-                Explore the rules. Follow the message. Understand the outcome.
-              </p>
-            </div>
-
             <section
               className="scenario-heading"
               aria-labelledby="scenario-title"
@@ -458,7 +495,6 @@ export function App() {
                   <span>/ 06</span>
                 </div>
                 <h2 id="scenario-title">{scenario.title}</h2>
-                <p>{scenario.description}</p>
               </div>
               <button
                 type="button"
@@ -490,6 +526,11 @@ export function App() {
               </span>
             </div>
 
+            <div className="request-context">
+              <span>FOLLOWING</span>
+              <strong>{frame.requestLabel}</strong>
+              <span>{frame.request.split("\n")[0]}</span>
+            </div>
             <section
               className="panel flow-panel"
               aria-labelledby="flow-heading"
@@ -499,22 +540,69 @@ export function App() {
                   <Waypoints size={16} />
                   System flow
                 </h3>
-                <div className="flow-legend">
-                  <span>
-                    <i className="legend-dot" />
-                    Current step
+                <div className="flow-heading-controls">
+                  <span className="flow-view-label">
+                    {showInternals ? "View 2 · Detailed" : "View 1 · Overview"}
                   </span>
-                  <span>
-                    <i className="legend-line" />
-                    Message path
-                  </span>
+                  <label className="detail-toggle">
+                    <input
+                      type="checkbox"
+                      checked={showInternals}
+                      onChange={(event) => {
+                        setShowInternals(event.target.checked);
+                      }}
+                    />
+                    View 2 · Show internals
+                  </label>
                 </div>
               </div>
-              <SystemFlow
-                frame={frame}
-                index={playback.frame}
-                playing={playing}
-              />
+              <div className="flow-legend flow-legend-row">
+                <span>
+                  <i className="legend-dot" />
+                  Current
+                </span>
+                <span>
+                  <i className="legend-dot legend-next" />
+                  Next
+                </span>
+                <span>
+                  <i className="legend-dot legend-parallel" />
+                  Parallel branches
+                </span>
+                <span>
+                  <i className="legend-line legend-request" />
+                  Request path
+                </span>
+                <span>
+                  <i className="legend-line legend-response" />
+                  Response path
+                </span>
+              </div>
+              <div className="flow-now">
+                <strong>Now: {frame.title}</strong>
+                <span>
+                  Next:{" "}
+                  {scenario.frames[playback.frame + 1]?.title ??
+                    "End of walkthrough"}
+                </span>
+              </div>
+              <FlowCanvas>
+                {showInternals ? (
+                  <InternalFlow
+                    frame={frame}
+                    next={scenario.frames[playback.frame + 1]}
+                    playing={playing}
+                    speed={speed}
+                  />
+                ) : (
+                  <SystemFlow
+                    frame={frame}
+                    next={scenario.frames[playback.frame + 1]}
+                    index={playback.frame}
+                    playing={playing}
+                  />
+                )}
+              </FlowCanvas>
               <div className="playback-bar">
                 <div className="step-controls">
                   <button
@@ -667,6 +755,11 @@ export function App() {
                   >
                     <h3>{frame.title}</h3>
                     <p>{frame.detail}</p>
+                    <div className="decision-note">
+                      <strong>Decision</strong>
+                      <span>{frame.decision}</span>
+                      <code>{frame.source}</code>
+                    </div>
                   </div>
                   <div className="facts">
                     {frame.facts.map(([label, value]) => (
