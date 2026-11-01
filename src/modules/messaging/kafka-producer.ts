@@ -14,6 +14,8 @@ export interface KafkaMessage {
 export interface EventProducer {
   /** Resolves only once every in-sync replica has acknowledged the message. */
   send(message: KafkaMessage): Promise<void>;
+  /** Rejects unless a broker answers now. A cached answer would prove nothing. */
+  assertReachable(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -36,6 +38,9 @@ export function createEventProducer(kafka: KafkaConfig): EventProducer {
   return {
     send: async ({ key, value }) => {
       await producer.send({ messages: [{ topic: kafka.topic, key, value }] });
+    },
+    assertReachable: async () => {
+      await producer.metadata({ topics: [kafka.topic], forceUpdate: true, retries: 0 });
     },
     close: () => producer.close(),
   };

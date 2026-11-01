@@ -81,7 +81,7 @@ This is enforced ownership for a single-owner design, not a proven distributed f
 - `markPublished` is outside the `try` around the send. A database failure after an acknowledged send therefore cannot be recorded as a failed send. It stops the publisher, and the successor resends the same stored payload.
 - `outbox_events.payload` is sent as stored, so a resend is identical.
 
-**Backlog limit:** the handoff asks for a documented limit on acceptance during a Kafka outage. In this phase the limit is the disk available to PostgreSQL: nothing refuses orders because of backlog, and nothing reports its size. Phase 4 adds backlog visibility, and the limit should be revisited with it.
+**Backlog limit:** the handoff asks for a documented limit on acceptance during a Kafka outage. The limit is the disk available to PostgreSQL, and nothing refuses orders because of backlog. [ADR 0004](0004-phase-4-evidence-and-operations.md#decision-the-backlog-limit) revisits this with measurements and keeps it.
 
 ## Decision: the matching transaction
 
@@ -154,6 +154,6 @@ Both repairs are covered by end-to-end tests, which make the same offset changes
 - Throughput is limited to one matcher working serially. This is the accepted design for version 1.
 - Duplicate delivery is expected and absorbed. Nothing here claims exactly-once behaviour across HTTP, PostgreSQL and Kafka, and the guarantee is at-least-once delivery with idempotent effects.
 - After a crash, restart takes up to the Kafka session timeout, because the group waits for the dead member to expire.
-- An event that keeps failing blocks matching and restarts its session every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. There is no alerting yet, which Phase 4 addresses along with lag.
+- An event that keeps failing blocks matching and restarts its session every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. `GET /ops/backlog` reports the lag, and nothing alerts on it ([ADR 0004](0004-phase-4-evidence-and-operations.md#limits-of-the-figures)).
 - Applying `002_matching.sql` to a database with data takes short write-blocking locks to build indexes, and the new check validates existing rows. Orders from Phase 1 are all `QUEUED` with a remainder, so they pass.
 - `fetch` in Node.js 26.7.0 (undici 8.9.0) stalled for 2.5 to 30 seconds when it reused an idle keep-alive connection. The same requests took milliseconds through a raw socket or `http.Agent`, and `fetch` stalled against a bare `node:http` server too, so the API is not the cause. The demo and the end-to-end tests send `connection: close`, which avoids it. The cause inside `fetch` was not traced, so Phase 3's outbound calls should not depend on its connection reuse without checking this first.

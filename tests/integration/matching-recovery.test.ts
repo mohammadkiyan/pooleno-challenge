@@ -19,6 +19,8 @@ import {
   TEST_DATABASE_URL,
 } from '../support/test-database.js';
 
+const NO_KAFKA = () => Promise.resolve({ available: false as const });
+
 const FAILS_ON_TRADE = `
   CREATE OR REPLACE FUNCTION fail_trade() RETURNS trigger AS $$
   BEGIN RAISE EXCEPTION 'simulated failure while inserting a trade'; END;
@@ -159,7 +161,7 @@ describe('applying accepted orders', () => {
 
   it('exposes the trades of both sides through GET, in execution order', async () => {
     const { s2, b1 } = await runFixture();
-    const app = buildApi({ pool, log: pino({ level: 'silent' }), lockTimeoutMs: 1_000 });
+    const app = buildApi({ pool, log: pino({ level: 'silent' }), lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
 
     const taker = (await app.inject({ url: `/v1/orders/${b1.orderId}` })).json<OrderResponse>();
     const maker = (await app.inject({ url: `/v1/orders/${s2.orderId}` })).json<OrderResponse>();

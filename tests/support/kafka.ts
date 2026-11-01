@@ -68,6 +68,9 @@ export async function produceRaw(
     clientId: 'pooleno-test-producer',
     bootstrapBrokers: kafka.brokers,
     serializers: stringSerializers,
+    // A new topic has no leader for a moment, and a plain retry then writes a batch twice.
+    idempotent: true,
+    retries: 3,
     acks: ProduceAcks.ALL,
     partitioner: compatibilityPartitioner,
   });

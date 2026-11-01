@@ -11,10 +11,22 @@ const config = loadPublisherConfig();
 const log = createLogger('publisher', config.logLevel);
 
 await runAsSoleOwner(
-  { databaseUrl: config.databaseUrl, lockId: PUBLISHER_LOCK_ID, log },
-  async ({ signal, assertHeld }) => {
+  {
+    databaseUrl: config.databaseUrl,
+    lockId: PUBLISHER_LOCK_ID,
+    log,
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+    health: config.health,
+  },
+  async ({ signal, assertHeld, reportReadiness }) => {
     const pool = createPool(config.databaseUrl, log);
     const producer = createEventProducer(config.kafka);
+    reportReadiness(() =>
+      producer.assertReachable().then(
+        () => undefined,
+        () => 'kafka unreachable',
+      ),
+    );
 
     try {
       await publishOutbox({

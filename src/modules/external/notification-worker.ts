@@ -51,7 +51,7 @@ async function recordOutcome(
   outcome: DeliveryOutcome,
 ): Promise<void> {
   const attempts = job.attempts + 1;
-  const context = { eventId: job.eventId, attempts };
+  const context = { ...job.logContext, eventId: job.eventId, attempts };
   let recorded: boolean;
 
   if (outcome.kind === 'delivered') {

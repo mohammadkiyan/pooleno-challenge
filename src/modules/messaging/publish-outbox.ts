@@ -36,7 +36,9 @@ export async function publishDueEvents(pass: PublishPass): Promise<number> {
       break;
     }
     const context = {
+      requestId: head.requestId,
       eventId: head.eventId,
+      orderId: head.orderId,
       symbol: head.symbol,
       acceptanceSequence: head.acceptanceSeq,
     };

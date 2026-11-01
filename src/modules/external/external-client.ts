@@ -11,6 +11,9 @@ export interface NotificationTarget {
 /** Statuses that may succeed if repeated. 409 is a destination still working on this key. */
 const TRANSIENT_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
+/** Only the start of an error is worth keeping, and a destination decides how much it sends. */
+const MAX_ERROR_BODY_LENGTH = 500;
+
 /**
  * Sends one attempt under the job's stable key, and classifies how it ended. It never
  * rejects: a network failure or timeout may have reached the destination, so it is
@@ -48,13 +51,29 @@ export async function deliverNotification(
     return { kind: 'delivered' };
   }
 
-  const body = await response.text().catch(() => '');
-  const error = `HTTP ${response.status}: ${body}`;
+  const error = `HTTP ${response.status}: ${await readErrorBody(response)}`;
   if (TRANSIENT_STATUSES.has(response.status)) {
     const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'));
     return { kind: 'transient', error, retryAfterMs };
   }
   return { kind: 'permanent', error };
+}
+
+async function readErrorBody(response: Response): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    // Leaving this loop early cancels the rest of the body.
+    for await (const chunk of response.body ?? []) {
+      text += decoder.decode(chunk, { stream: true });
+      if (text.length >= MAX_ERROR_BODY_LENGTH) {
+        return text.slice(0, MAX_ERROR_BODY_LENGTH);
+      }
+    }
+  } catch {
+    // A body cut off part way still leaves the status, and whatever had arrived.
+  }
+  return text;
 }
 
 /** Reads `Retry-After` in either of its forms: a number of seconds or an HTTP date. */

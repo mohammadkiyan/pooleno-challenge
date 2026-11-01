@@ -29,6 +29,7 @@ import {
   type RunningApi,
 } from '../support/processes.js';
 import {
+  countInbox,
   countRows,
   readCounter,
   readOrder,
@@ -437,6 +438,36 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
       expect(await readOrder(pool, seller.orderId)).toEqual({
         status: 'FILLED',
         remaining_units: '0',
+      });
+    });
+
+    it('leaves nothing of a transaction when it dies before the commit', async () => {
+      const seller = await acceptEvent(pool, ethOrder('SELL', '100.00', '0.0030'));
+      startRole('publisher');
+      const matcher = startRole('matching');
+      await waitForStatus(seller.orderId, 'OPEN');
+      await waitForCommittedMessages(1);
+
+      const holder = await holdProgressRow('ETH-USD');
+      const buyer = await acceptEvent(pool, ethOrder('BUY', '100.00', '0.0010'));
+      await waitForBlockedBackend(pool);
+
+      await matcher.kill();
+      await releaseRowLock(holder);
+
+      expect(await readOrder(pool, buyer.orderId)).toMatchObject({ status: 'QUEUED' });
+      expect(await readTrades(pool)).toHaveLength(0);
+      expect(await readProgress(pool, 'ETH-USD')).toBe('1');
+      expect(await countInbox(pool)).toBe(1);
+      expect(await committedMessages(stream)).toBe(1);
+
+      startRole('matching');
+      await waitForStatus(buyer.orderId, 'FILLED');
+      await waitForCommittedMessages(2);
+      expect(await readTrades(pool)).toHaveLength(1);
+      expect(await readOrder(pool, seller.orderId)).toEqual({
+        status: 'PARTIALLY_FILLED',
+        remaining_units: '20',
       });
     });
 

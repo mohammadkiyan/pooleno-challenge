@@ -15,6 +15,7 @@ export interface ExternalConsumerOptions {
   restartDelayMs: number;
   signal: AbortSignal;
   log: Logger;
+  onAssignmentChange: (assigned: boolean) => void;
 }
 
 /**
@@ -23,7 +24,8 @@ export interface ExternalConsumerOptions {
  * the last committed offset, and the Inbox makes the redelivery a no-op.
  */
 export async function runExternalConsumer(options: ExternalConsumerOptions): Promise<void> {
-  const { pool, kafka, groupId, sessionTimeoutMs, restartDelayMs, signal, log } = options;
+  const { pool, kafka, groupId, sessionTimeoutMs, restartDelayMs, signal, log, onAssignmentChange } =
+    options;
 
   while (!signal.aborted) {
     try {
@@ -34,6 +36,7 @@ export async function runExternalConsumer(options: ExternalConsumerOptions): Pro
         sessionTimeoutMs,
         signal,
         log,
+        onAssignmentChange,
         handle: (message) => handleMessage(pool, message, log),
       });
     } catch (error) {
@@ -56,7 +59,10 @@ async function handleMessage(pool: Pool, message: ConsumedMessage, log: Logger):
     return;
   }
 
-  const { eventId, orderId } = event;
+  const { eventId, orderId, symbol, acceptanceSequence, correlationId: requestId } = event;
   const scheduled = await scheduleNotification(pool, { eventId, payload: message.value });
-  log.info({ eventId, orderId }, scheduled ? 'notification scheduled' : 'event already scheduled');
+  log.info(
+    { requestId, eventId, orderId, symbol, acceptanceSequence },
+    scheduled ? 'notification scheduled' : 'event already scheduled',
+  );
 }

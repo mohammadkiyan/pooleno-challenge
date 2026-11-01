@@ -1,6 +1,6 @@
 # ADR 0003: Phase 3 external notification choices
 
-- **Status:** proposed; Phase 3 is awaiting review
+- **Status:** accepted; Phase 3 was reviewed and approved on 2026-10-31
 - **Date:** 2026-10-31
 
 ## Context
@@ -39,12 +39,13 @@ Native `fetch`, the handoff's default, with `AbortSignal.timeout`, which also bo
 
 - **`connection: close` on every call.** [ADR 0002](0002-phase-2-messaging-and-matching.md#consequences) recorded that `fetch` stalled when it reused an idle keep-alive connection, and asked this phase to check before relying on reuse. A probe of 20 `POST`s a second apart against a bare `node:http` server reproduced it on Node.js 26.7.0, where reused connections took up to 2 s per request and `connection: close` at most 22 ms. On the image's 26.13.0, neither stalled. The supported range includes both, so the header stays. A new connection per attempt costs little at this rate.
 - **`redirect: 'manual'`,** because a followed redirect can turn a `POST` into a `GET`. A 3xx is reported as a permanent failure.
+- **Only the first 500 characters of an error body are read.** The timeout bounds time but not size, so a destination could otherwise fill memory within one attempt, and a process killed for that would never record the attempt or use up its budget. The rest of the body is cancelled.
 
 ## Decision: retry budget
 
 | Setting | Variable | Default | Reason |
 |---|---|---|---|
-| Timeout per attempt | `EXTERNAL_TIMEOUT_MS` | 5 s | Ample for a small `POST`, and bounds how long one job can hold up the serial worker and shutdown. Shorter than Compose's 10 s stop grace period |
+| Timeout per attempt | `EXTERNAL_TIMEOUT_MS` | 5 s | Ample for a small `POST`, and bounds how long one job can hold up the serial worker and shutdown. Shorter than the 8 s shutdown deadline |
 | Poll interval | `EXTERNAL_POLL_INTERVAL_MS` | 500 ms | Sets the delay before a new job's first attempt when the worker is idle |
 | First retry delay | `EXTERNAL_RETRY_BASE_MS` | 1 s | Recovers quickly from a blip, doubling on each attempt |
 | Delay cap | `EXTERNAL_RETRY_CAP_MS` | 5 min | Reached at the 10th attempt. Notices a recovered destination within minutes, without pressing it during an outage |
@@ -148,6 +149,6 @@ docker compose start external
 - **Serial delivery:** if the destination stops answering altogether, each due job costs the full timeout, so 100 due jobs take over 8 minutes per pass and there is no circuit breaker. New jobs wait behind that. This affects only notifications.
 - **No order between notifications:** a retried job can arrive after a later one. The body carries `acceptanceSequence` for a destination that needs order.
 - **First start reads back:** a new group starts from the earliest retained event, so deploying this role notifies every accepted order still in the topic, up to 30 days. Older orders get no notification.
-- **Nothing reports trouble yet:** `FAILED` jobs and quarantine rows are visible only by querying, and logged as errors when they happen. Phase 4 adds backlog visibility.
+- **Trouble is reported, not alerted:** `FAILED` jobs and quarantine rows are logged as errors when they happen, and counted by `GET /ops/backlog` ([ADR 0004](0004-phase-4-evidence-and-operations.md#decision-the-backlog-report)). Nothing alerts on them.
 - **Tables grow:** jobs and quarantine rows are never deleted, like the other durable records.
 - **Migration:** `003_external_jobs.sql` only adds new tables and indexes, and leaves existing rows and locks alone.

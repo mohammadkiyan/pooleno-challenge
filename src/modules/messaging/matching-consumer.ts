@@ -15,6 +15,8 @@ export interface MatchingConsumerOptions {
   restartDelayMs: number;
   signal: AbortSignal;
   log: Logger;
+  /** A session starts only after restoring its books, so being assigned implies a restored book. */
+  onAssignmentChange: (assigned: boolean) => void;
 }
 
 /**
@@ -37,7 +39,7 @@ export async function runMatchingConsumer(options: MatchingConsumerOptions): Pro
 }
 
 async function runSession(options: MatchingConsumerOptions): Promise<void> {
-  const { pool, kafka, groupId, sessionTimeoutMs, signal, log } = options;
+  const { pool, kafka, groupId, sessionTimeoutMs, signal, log, onAssignmentChange } = options;
 
   const books = await restoreBooks(pool);
   log.info({ symbols: [...books.keys()] }, 'books restored');
@@ -49,6 +51,7 @@ async function runSession(options: MatchingConsumerOptions): Promise<void> {
     sessionTimeoutMs,
     signal,
     log,
+    onAssignmentChange,
     handle: ({ value }) => handleMessage(pool, books, value, log),
   });
 }
@@ -61,6 +64,7 @@ async function handleMessage(
 ): Promise<void> {
   const event = parseOrderAccepted(value);
   const context = {
+    requestId: event.correlationId,
     eventId: event.eventId,
     orderId: event.orderId,
     symbol: event.symbol,

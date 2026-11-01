@@ -36,6 +36,8 @@ import {
 } from '../support/test-database.js';
 
 const CRASH_BEFORE_OFFSET_COMMIT = './tests/e2e/crash-before-offset-commit.preload.ts';
+const CRASH_BEFORE_RECORDING_DELIVERY =
+  './tests/integration/crash-before-recording-delivery.preload.ts';
 const CLOSED_PORT = '127.0.0.1:1';
 const SESSION_TIMEOUT_MS = 6_000;
 // The mock's log of a request to its contract, rather than to its control endpoints.
@@ -173,6 +175,29 @@ async function failInserts(table: 'external_jobs' | 'external_quarantine'): Prom
 
 describe('external notifications through real processes', { timeout: 120_000 }, () => {
   describe('the gap between a remote effect and the local result', () => {
+    it('repeats no effect when the worker dies before recording the answer', async () => {
+      const destination = await startMockApi(mock);
+      const event = await acceptEvent(pool, SELL);
+      await scheduleNotification(pool, {
+        eventId: event.eventId,
+        payload: JSON.stringify(event),
+      });
+
+      const doomed = startExternal({}, CRASH_BEFORE_RECORDING_DELIVERY);
+
+      expect((await doomed.exited).signal).toBe('SIGKILL');
+      const effects = await readEffects(mock);
+      expect(effects).toHaveLength(1);
+      // A crash uses up none of the budget, and the job is still due.
+      expect(await readJob(pool, event.eventId)).toMatchObject({ status: 'PENDING', attempts: 0 });
+
+      startExternal();
+
+      await waitForJob(event.eventId, { status: 'SUCCEEDED', attempts: 1 });
+      await destination.waitForMatch(/"outcome":"replayed"/);
+      expect(await readEffects(mock)).toEqual(effects);
+    });
+
     it('retries a lost response under one key, with one effect, across a mock restart', async () => {
       const destination = await startMockApi(mock);
       await injectFault(mock, { mode: 'lost-response' });
@@ -350,6 +375,29 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
       await restarted.waitForLog('event already scheduled');
       await waitForCommittedMessages(1);
       expect(await countJobs(pool)).toBe(1);
+    });
+
+    it('leaves no job and no offset when it dies inside the handoff transaction', async () => {
+      await startMockApi(mock);
+      const event = await acceptEvent(pool, SELL);
+      const holder = await holdInboxRow(event.eventId);
+      await publish(event);
+
+      const doomed = startExternal();
+      await waitForBlockedBackend(pool);
+
+      await doomed.kill();
+      await releaseRow(holder);
+
+      expect(await countJobs(pool)).toBe(0);
+      expect(await committedMessages(stream)).toBe(0);
+
+      startExternal();
+
+      await waitForJob(event.eventId, { status: 'SUCCEEDED', attempts: 1 });
+      await waitForCommittedMessages(1);
+      expect(await countJobs(pool)).toBe(1);
+      expect(await readEffects(mock)).toHaveLength(1);
     });
 
     it('finishes its transaction on SIGTERM and commits nothing beyond durable work', async () => {
@@ -545,6 +593,19 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
       await expect(runRedrive('00000000-0000-4000-8000-000000000000')).resolves.toMatchObject({
         code: 1,
       });
+    });
+
+    it('still redrives the other jobs when one event ID is not valid, and reports it', async () => {
+      await startMockApi(mock);
+      await injectFault(mock, { mode: 'status', status: 400 });
+      const event = await acceptEvent(pool, SELL);
+      await publish(event);
+      startExternal();
+      await waitForJob(event.eventId, { status: 'FAILED', attempts: 1 });
+
+      await expect(runRedrive('not-a-uuid', event.eventId)).resolves.toMatchObject({ code: 1 });
+
+      await waitForJob(event.eventId, { status: 'SUCCEEDED', attempts: 1 });
     });
   });
 

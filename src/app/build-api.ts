@@ -3,6 +3,8 @@ import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import Fastify, { LogController } from 'fastify';
 import type { Pool } from 'pg';
 import type { Logger } from 'pino';
+import type { KafkaLag } from '../modules/operations/kafka-lag.js';
+import { operationsRoutes } from '../modules/operations/operations.routes.js';
 import { orderRoutes } from '../modules/orders/order.routes.js';
 import { ApiError } from './api-error.js';
 
@@ -10,9 +12,10 @@ export interface ApiDependencies {
   pool: Pool;
   log: Logger;
   lockTimeoutMs: number;
+  readKafkaLag: () => Promise<KafkaLag>;
 }
 
-export function buildApi({ pool, log, lockTimeoutMs }: ApiDependencies) {
+export function buildApi({ pool, log, lockTimeoutMs, readKafkaLag }: ApiDependencies) {
   const app = Fastify({
     loggerInstance: log,
     genReqId: () => randomUUID(),
@@ -46,6 +49,7 @@ export function buildApi({ pool, log, lockTimeoutMs }: ApiDependencies) {
   );
 
   void app.register(orderRoutes, { pool, lockTimeoutMs });
+  void app.register(operationsRoutes, { pool, readKafkaLag });
 
   return app;
 }

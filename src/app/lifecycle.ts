@@ -1,26 +1,45 @@
 import type { Logger } from 'pino';
 
+export interface ShutdownOptions {
+  log: Logger;
+  /** How long a shutdown may take. Must be shorter than the supervisor's grace period. */
+  deadlineMs: number;
+}
+
 /**
- * Runs `close` on SIGINT or SIGTERM. Repeating the signal terminates the process
- * at once, which is safe because all state is durable.
+ * Runs `close` on the first SIGINT or SIGTERM. A shutdown still running at the deadline
+ * ends the process, and so does a second signal. Either is safe, because all state is
+ * durable and what was cut short is replayed.
  */
-export function closeOnSignal(log: Logger, close: () => Promise<void>): void {
+export function closeOnSignal(
+  { log, deadlineMs }: ShutdownOptions,
+  close: () => Promise<void>,
+): void {
   const shutdown = (signal: NodeJS.Signals): void => {
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+
     log.info({ signal }, 'shutting down');
+    // Unreferenced, so that it never keeps alive a process that has finished.
+    setTimeout(() => {
+      log.error({ deadlineMs }, 'shutdown deadline passed; exiting');
+      process.exit(1);
+    }, deadlineMs).unref();
+
     close().catch((error: unknown) => {
       log.error({ err: error }, 'shutdown failed');
       process.exitCode = 1;
     });
   };
 
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 /** The same contract for a role that drains a loop: the signal aborts on SIGINT or SIGTERM. */
-export function shutdownSignal(log: Logger): AbortSignal {
+export function shutdownSignal(options: ShutdownOptions): AbortSignal {
   const shutdown = new AbortController();
-  closeOnSignal(log, () => {
+  closeOnSignal(options, () => {
     shutdown.abort();
     return Promise.resolve();
   });

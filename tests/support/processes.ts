@@ -42,7 +42,8 @@ export class RoleProcess {
     this.#child = spawn(
       process.execPath,
       ['--import', 'tsx', ...preloadArguments, ENTRYPOINTS[entrypoint], ...args],
-      { env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL, ...env } },
+      // Any free port, because several roles can run at once on one machine here.
+      { env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL, HEALTH_PORT: '0', ...env } },
     );
 
     const record = (chunk: Buffer): void => {
@@ -60,6 +61,10 @@ export class RoleProcess {
 
   countLogs(message: string): number {
     return this.#output.split(`"msg":"${message}"`).length - 1;
+  }
+
+  logsContain(text: string): boolean {
+    return this.#output.includes(text);
   }
 
   /** Resolves once the process has logged the message, without guessing with a delay. */
@@ -94,6 +99,23 @@ export class RoleProcess {
       { timeout: WAIT_MS, interval: 25 },
     );
   }
+}
+
+/** Where a role's own health server ended up, since the tests ask for any free port. */
+export async function healthUrlOf(role: RoleProcess): Promise<string> {
+  const [, port] = await role.waitForMatch(/"port":(\d+)[^\n]*"msg":"health server listening"/);
+  return `http://127.0.0.1:${port as string}`;
+}
+
+export async function readHealth(
+  baseUrl: string,
+  path: '/health/live' | '/health/ready',
+): Promise<{ status: number; body: { status?: string; reason?: string } }> {
+  const response = await fetch(`${baseUrl}${path}`, { headers: { connection: 'close' } });
+  return {
+    status: response.status,
+    body: (await response.json()) as { status?: string; reason?: string },
+  };
 }
 
 export async function killAllRoles(): Promise<void> {

@@ -3,13 +3,19 @@ import { loadConfig } from '../app/config.js';
 import { closeOnSignal } from '../app/lifecycle.js';
 import { createPool } from '../infrastructure/db.js';
 import { createLogger } from '../infrastructure/logger.js';
+import { readKafkaLag } from '../modules/operations/kafka-lag.js';
 
 const config = loadConfig();
 const log = createLogger('api', config.logLevel);
 const pool = createPool(config.databaseUrl, log);
-const app = buildApi({ pool, log, lockTimeoutMs: config.lockTimeoutMs });
+const app = buildApi({
+  pool,
+  log,
+  lockTimeoutMs: config.lockTimeoutMs,
+  readKafkaLag: () => readKafkaLag(config.kafka, config.consumerGroups, log),
+});
 
-closeOnSignal(log, async () => {
+closeOnSignal({ log, deadlineMs: config.shutdownTimeoutMs }, async () => {
   await app.close();
   await pool.end();
 });

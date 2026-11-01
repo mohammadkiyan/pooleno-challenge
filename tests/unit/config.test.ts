@@ -17,7 +17,20 @@ describe('loadConfig', () => {
       port: 8080,
       logLevel: 'info',
       lockTimeoutMs: 1_000,
+      shutdownTimeoutMs: 8_000,
+      kafka: { brokers: ['127.0.0.1:59092'], topic: 'orders.accepted' },
+      consumerGroups: ['matching-v1', 'external-notification-v1'],
     });
+  });
+
+  it('reports lag for the groups the roles actually use', () => {
+    const config = loadConfig({
+      DATABASE_URL,
+      MATCHING_GROUP_ID: 'matching-b',
+      EXTERNAL_GROUP_ID: 'external-b',
+    });
+
+    expect(config.consumerGroups).toEqual(['matching-b', 'external-b']);
   });
 
   it('requires DATABASE_URL', () => {
@@ -34,6 +47,7 @@ describe('loadConfig', () => {
     ['ACCEPTANCE_LOCK_TIMEOUT_MS', '1.5'],
     // In PostgreSQL a lock_timeout of 0 means no limit, which would unbound the wait.
     ['ACCEPTANCE_LOCK_TIMEOUT_MS', '0'],
+    ['SHUTDOWN_TIMEOUT_MS', '0'],
   ])('rejects %s=%s', (name, value) => {
     expect(() => loadConfig({ DATABASE_URL, [name]: value })).toThrow(name);
   });
@@ -95,6 +109,31 @@ describe('loadMatchingConfig', () => {
     expect(() =>
       loadMatchingConfig({ DATABASE_URL, MATCHING_SESSION_TIMEOUT_MS: '5999' }),
     ).toThrow('MATCHING_SESSION_TIMEOUT_MS');
+  });
+});
+
+describe.each([
+  ['publisher', loadPublisherConfig, 8081],
+  ['matching', loadMatchingConfig, 8082],
+  ['external', loadExternalConfig, 8083],
+])('lifecycle settings of the %s role', (_role, load, healthPort) => {
+  it('stays on loopback and shuts down within the grace period by default', () => {
+    expect(load({ DATABASE_URL })).toMatchObject({
+      shutdownTimeoutMs: 8_000,
+      health: { host: '127.0.0.1', port: healthPort },
+    });
+  });
+
+  it('allows an ephemeral health port', () => {
+    expect(load({ DATABASE_URL, HEALTH_PORT: '0' }).health.port).toBe(0);
+  });
+
+  it.each([
+    ['HEALTH_PORT', '-1'],
+    ['HEALTH_PORT', '65536'],
+    ['SHUTDOWN_TIMEOUT_MS', '0'],
+  ])('rejects %s=%s', (name, value) => {
+    expect(() => load({ DATABASE_URL, [name]: value })).toThrow(name);
   });
 });
 

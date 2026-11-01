@@ -3,6 +3,9 @@ import type { OrderAcceptedV1 } from './order-accepted.schema.js';
 
 export interface OutboxHead {
   eventId: string;
+  orderId: string;
+  /** The request that accepted the order, so its logs can be followed across roles. */
+  requestId: string | null;
   symbol: string;
   acceptanceSeq: string;
   /** The stored payload, unchanged, so a resend is identical to the first send. */
@@ -37,13 +40,15 @@ export async function insertOutboxEvent(tx: PoolClient, event: OrderAcceptedV1):
 export async function findDueHeads(pool: Pool): Promise<OutboxHead[]> {
   const { rows } = await pool.query<{
     event_id: string;
+    order_id: string;
+    request_id: string | null;
     symbol: string;
     acceptance_seq: string;
     payload: string;
     attempts: number;
   }>(
-    `SELECT head.event_id, head.symbol, head.acceptance_seq, head.payload::text AS payload,
-            head.attempts
+    `SELECT head.event_id, head.order_id, head.payload->>'correlationId' AS request_id,
+            head.symbol, head.acceptance_seq, head.payload::text AS payload, head.attempts
        FROM symbol_sequences s
       CROSS JOIN LATERAL (
         SELECT e.*
@@ -57,6 +62,8 @@ export async function findDueHeads(pool: Pool): Promise<OutboxHead[]> {
 
   return rows.map((row) => ({
     eventId: row.event_id,
+    orderId: row.order_id,
+    requestId: row.request_id,
     symbol: row.symbol,
     acceptanceSeq: row.acceptance_seq,
     payload: row.payload,

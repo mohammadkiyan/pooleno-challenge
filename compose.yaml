@@ -4,6 +4,18 @@ x-app: &app
   build: .
   image: pooleno-order-processing:local
 
+# Longer than SHUTDOWN_TIMEOUT_MS, which is 8 s, so that a role always stops by itself first.
+x-lifecycle: &lifecycle
+  stop_grace_period: 10s
+
+# Failures during start_period do not count, so a slow start is not called unhealthy, while an
+# outage after that shows within seconds. Docker restarts nothing for being unhealthy.
+x-role-health: &role-health
+  interval: 2s
+  timeout: 3s
+  retries: 3
+  start_period: 60s
+
 services:
   postgres:
     image: postgres:18.6-alpine3.24
@@ -73,33 +85,34 @@ services:
         condition: service_healthy
 
   api:
-    <<: *app
+    <<: [*app, *lifecycle]
     environment:
       DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
       HOST: 0.0.0.0
       PORT: 8080
+      # Only to report lag, so this role neither waits for Kafka nor needs it to accept orders.
+      KAFKA_BROKERS: kafka:19092
     ports:
       - "127.0.0.1:8080:8080"
-    # Only proves the port accepts connections, so that `up --wait` waits for the API.
     healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "require('node:net').connect(8080, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"
-      interval: 1s
-      timeout: 2s
-      retries: 30
+      <<: *role-health
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
     depends_on:
       migrate:
         condition: service_completed_successfully
 
   publisher:
-    <<: *app
+    <<: [*app, *lifecycle]
     command: ["node", "dist/entrypoints/publisher.js"]
     environment:
       DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
       KAFKA_BROKERS: kafka:19092
+      HEALTH_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      <<: *role-health
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
     # Losing PostgreSQL ends ownership, so the process exits and a new one takes the lock.
     restart: on-failure
     depends_on:
@@ -109,11 +122,17 @@ services:
         condition: service_completed_successfully
 
   matching:
-    <<: *app
+    <<: [*app, *lifecycle]
     command: ["node", "dist/entrypoints/matching.js"]
     environment:
       DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
       KAFKA_BROKERS: kafka:19092
+      HEALTH_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8082:8082"
+    healthcheck:
+      <<: *role-health
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/health/ready"]
     restart: on-failure
     depends_on:
       migrate:
@@ -122,12 +141,18 @@ services:
         condition: service_completed_successfully
 
   external:
-    <<: *app
+    <<: [*app, *lifecycle]
     command: ["node", "dist/entrypoints/external.js"]
     environment:
       DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
       KAFKA_BROKERS: kafka:19092
       EXTERNAL_API_URL: http://mock-api:58080/v1/notifications
+      HEALTH_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:8083:8083"
+    healthcheck:
+      <<: *role-health
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
     restart: on-failure
     # Not on mock-api: the destination being down is a delivery condition, not a reason to wait.
     depends_on:

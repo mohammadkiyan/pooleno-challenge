@@ -6,6 +6,13 @@ export interface DueJob {
   /** The original event, unchanged, so that every attempt sends the same body. */
   payload: string;
   attempts: number;
+  /** Copied from the payload for the logs. Null only for a payload that is not an event. */
+  logContext: {
+    requestId: string | null;
+    orderId: string | null;
+    symbol: string | null;
+    acceptanceSequence: string | null;
+  };
 }
 
 const MAX_STORED_ERROR_LENGTH = 500;
@@ -36,8 +43,16 @@ export async function findDueJobs(pool: Pool, limit: number): Promise<DueJob[]> 
     target_key: string;
     payload: string;
     attempts: number;
+    request_id: string | null;
+    order_id: string | null;
+    symbol: string | null;
+    acceptance_sequence: string | null;
   }>(
-    `SELECT event_id, target_key, payload::text AS payload, attempts
+    `SELECT event_id, target_key, payload::text AS payload, attempts,
+            payload->>'correlationId' AS request_id,
+            payload->>'orderId' AS order_id,
+            payload->>'symbol' AS symbol,
+            payload->>'acceptanceSequence' AS acceptance_sequence
        FROM external_jobs
       WHERE status = 'PENDING' AND next_attempt_at <= now()
       ORDER BY next_attempt_at, event_id
@@ -50,6 +65,12 @@ export async function findDueJobs(pool: Pool, limit: number): Promise<DueJob[]> 
     targetKey: row.target_key,
     payload: row.payload,
     attempts: row.attempts,
+    logContext: {
+      requestId: row.request_id,
+      orderId: row.order_id,
+      symbol: row.symbol,
+      acceptanceSequence: row.acceptance_sequence,
+    },
   }));
 }
 

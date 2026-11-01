@@ -144,6 +144,7 @@ describe('attempting due jobs', () => {
         targetKey: `external-notify:${eventId}`,
         payload: '{ "from" : "the event" }',
         attempts: 0,
+        logContext: { requestId: null, orderId: null, symbol: null, acceptanceSequence: null },
       },
     ]);
     const job = await readJob(pool, eventId);

@@ -1,9 +1,15 @@
+import type { HealthAddress } from './health-server.js';
+
 export interface Config {
   databaseUrl: string;
   host: string;
   port: number;
   logLevel: string;
   lockTimeoutMs: number;
+  shutdownTimeoutMs: number;
+  /** Read only to report lag. Accepting an order never touches Kafka. */
+  kafka: KafkaConfig;
+  consumerGroups: string[];
 }
 
 export interface KafkaConfig {
@@ -14,6 +20,8 @@ export interface KafkaConfig {
 export interface PublisherConfig {
   databaseUrl: string;
   logLevel: string;
+  shutdownTimeoutMs: number;
+  health: HealthAddress;
   kafka: KafkaConfig;
   pollIntervalMs: number;
   retryBaseMs: number;
@@ -23,6 +31,8 @@ export interface PublisherConfig {
 export interface MatchingConfig {
   databaseUrl: string;
   logLevel: string;
+  shutdownTimeoutMs: number;
+  health: HealthAddress;
   kafka: KafkaConfig;
   groupId: string;
   sessionTimeoutMs: number;
@@ -39,6 +49,8 @@ export interface NotificationRetryPolicy {
 export interface ExternalConfig {
   databaseUrl: string;
   logLevel: string;
+  shutdownTimeoutMs: number;
+  health: HealthAddress;
   kafka: KafkaConfig;
   groupId: string;
   sessionTimeoutMs: number;
@@ -57,6 +69,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: env.LOG_LEVEL ?? 'info',
     // PostgreSQL treats a lock_timeout of 0 as "wait forever", so the minimum is 1.
     lockTimeoutMs: readInteger(env, 'ACCEPTANCE_LOCK_TIMEOUT_MS', { fallback: 1_000, min: 1 }),
+    shutdownTimeoutMs: readShutdownTimeout(env),
+    kafka: loadKafkaConfig(env),
+    consumerGroups: [readMatchingGroup(env), readExternalGroup(env)],
   };
 }
 
@@ -71,6 +86,8 @@ export function loadPublisherConfig(env: NodeJS.ProcessEnv = process.env): Publi
   return {
     databaseUrl: readDatabaseUrl(env),
     logLevel: env.LOG_LEVEL ?? 'info',
+    shutdownTimeoutMs: readShutdownTimeout(env),
+    health: readHealthAddress(env, 8081),
     kafka: loadKafkaConfig(env),
     pollIntervalMs: readInteger(env, 'OUTBOX_POLL_INTERVAL_MS', { fallback: 200, min: 1 }),
     retryBaseMs: readInteger(env, 'OUTBOX_RETRY_BASE_MS', { fallback: 500, min: 1 }),
@@ -82,8 +99,10 @@ export function loadMatchingConfig(env: NodeJS.ProcessEnv = process.env): Matchi
   return {
     databaseUrl: readDatabaseUrl(env),
     logLevel: env.LOG_LEVEL ?? 'info',
+    shutdownTimeoutMs: readShutdownTimeout(env),
+    health: readHealthAddress(env, 8082),
     kafka: loadKafkaConfig(env),
-    groupId: env.MATCHING_GROUP_ID ?? 'matching-v1',
+    groupId: readMatchingGroup(env),
     // Kafka brokers refuse a session timeout below group.min.session.timeout.ms, 6000 by default.
     sessionTimeoutMs: readInteger(env, 'MATCHING_SESSION_TIMEOUT_MS', {
       fallback: 10_000,
@@ -97,8 +116,10 @@ export function loadExternalConfig(env: NodeJS.ProcessEnv = process.env): Extern
   return {
     databaseUrl: readDatabaseUrl(env),
     logLevel: env.LOG_LEVEL ?? 'info',
+    shutdownTimeoutMs: readShutdownTimeout(env),
+    health: readHealthAddress(env, 8083),
     kafka: loadKafkaConfig(env),
-    groupId: env.EXTERNAL_GROUP_ID ?? 'external-notification-v1',
+    groupId: readExternalGroup(env),
     sessionTimeoutMs: readInteger(env, 'EXTERNAL_SESSION_TIMEOUT_MS', {
       fallback: 10_000,
       min: 6_000,
@@ -117,6 +138,26 @@ export function loadExternalConfig(env: NodeJS.ProcessEnv = process.env): Extern
       }),
       maxAttempts: readInteger(env, 'EXTERNAL_MAX_ATTEMPTS', { fallback: 400, min: 1 }),
     },
+  };
+}
+
+function readMatchingGroup(env: NodeJS.ProcessEnv): string {
+  return env.MATCHING_GROUP_ID ?? 'matching-v1';
+}
+
+function readExternalGroup(env: NodeJS.ProcessEnv): string {
+  return env.EXTERNAL_GROUP_ID ?? 'external-notification-v1';
+}
+
+/** Must stay below the supervisor's grace period, which is 10 s in compose.yaml. */
+function readShutdownTimeout(env: NodeJS.ProcessEnv): number {
+  return readInteger(env, 'SHUTDOWN_TIMEOUT_MS', { fallback: 8_000, min: 1 });
+}
+
+function readHealthAddress(env: NodeJS.ProcessEnv, defaultPort: number): HealthAddress {
+  return {
+    host: env.HEALTH_HOST ?? '127.0.0.1',
+    port: readInteger(env, 'HEALTH_PORT', { fallback: defaultPort, min: 0, max: 65_535 }),
   };
 }
 

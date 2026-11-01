@@ -159,6 +159,40 @@ describe('deliverNotification', () => {
     expect(requests).toEqual(['/v1/notifications']);
   });
 
+  it('reads no more of an error body than it keeps, however much is sent', async () => {
+    let stoppedReading = false;
+    const url = await serve((_request, response) => {
+      response.writeHead(500);
+      const timer = setInterval(() => response.write('x'.repeat(1_024)), 1);
+      response.on('close', () => {
+        clearInterval(timer);
+        stoppedReading = true;
+      });
+    });
+
+    const outcome = await deliverNotification({ url, timeoutMs: 2_000 }, JOB);
+
+    expect(outcome).toEqual({
+      kind: 'transient',
+      error: `HTTP 500: ${'x'.repeat(500)}`,
+      retryAfterMs: undefined,
+    });
+    await expect.poll(() => stoppedReading).toBe(true);
+  });
+
+  it('keeps the status of an error whose body is cut off', async () => {
+    const url = await serve((_request, response) => {
+      response.writeHead(503, { 'content-length': '100' });
+      response.write('partial', () => response.destroy());
+    });
+
+    await expect(deliverNotification({ url, timeoutMs: 2_000 }, JOB)).resolves.toEqual({
+      kind: 'transient',
+      error: 'HTTP 503: partial',
+      retryAfterMs: undefined,
+    });
+  });
+
   it('passes on Retry-After with a transient status', async () => {
     const url = await answerWith(503, '', { 'retry-after': '3' });
 

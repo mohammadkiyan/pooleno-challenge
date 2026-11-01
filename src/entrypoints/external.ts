@@ -13,9 +13,18 @@ const log = createLogger('external', config.logLevel);
 const target = { url: config.targetUrl, timeoutMs: config.timeoutMs };
 
 await runAsSoleOwner(
-  { databaseUrl: config.databaseUrl, lockId: EXTERNAL_LOCK_ID, log },
-  async ({ signal, assertHeld }) => {
+  {
+    databaseUrl: config.databaseUrl,
+    lockId: EXTERNAL_LOCK_ID,
+    log,
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+    health: config.health,
+  },
+  async ({ signal, assertHeld, reportReadiness }) => {
     const pool = createPool(config.databaseUrl, log);
+    // The destination is deliberately not part of this: its outage is a delivery condition.
+    let assigned = false;
+    reportReadiness(() => Promise.resolve(assigned ? undefined : 'no partitions assigned'));
 
     try {
       // Neither loop rejects, because each resumes from durable state until the signal
@@ -29,6 +38,9 @@ await runAsSoleOwner(
           restartDelayMs: config.restartDelayMs,
           signal,
           log,
+          onAssignmentChange: (value) => {
+            assigned = value;
+          },
         }),
         runNotificationWorker({
           pool,

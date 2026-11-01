@@ -15,10 +15,16 @@ const pool = createPool(config.databaseUrl, log);
 
 try {
   for (const eventId of eventIds) {
-    if (await redriveJob(pool, eventId)) {
-      log.info({ eventId }, 'job redriven');
-    } else {
-      log.error({ eventId }, 'no failed job with this event ID');
+    // One bad ID must not cost the others, and the exit status still reports it.
+    try {
+      if (await redriveJob(pool, eventId)) {
+        log.info({ eventId }, 'job redriven');
+      } else {
+        log.error({ eventId }, 'no failed job with this event ID');
+        process.exitCode = 1;
+      }
+    } catch (error) {
+      log.error({ err: error, eventId }, 'redrive failed');
       process.exitCode = 1;
     }
   }

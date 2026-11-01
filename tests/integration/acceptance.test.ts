@@ -24,13 +24,14 @@ import {
 const log = pino({ level: 'silent' });
 const SHORT_LOCK_TIMEOUT_MS = 100;
 const NO_ROWS = { orders: 0, receipts: 0, events: 0 };
+const NO_KAFKA = () => Promise.resolve({ available: false as const });
 
 let pool: Pool;
 let app: ReturnType<typeof buildApi>;
 
 beforeAll(() => {
   pool = createPool(TEST_DATABASE_URL, log);
-  app = buildApi({ pool, log, lockTimeoutMs: 1_000 });
+  app = buildApi({ pool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
 });
 
 afterAll(async () => {
@@ -265,7 +266,7 @@ describe('concurrency', () => {
     let impatientApp: ReturnType<typeof buildApi>;
 
     beforeAll(() => {
-      impatientApp = buildApi({ pool, log, lockTimeoutMs: SHORT_LOCK_TIMEOUT_MS });
+      impatientApp = buildApi({ pool, log, lockTimeoutMs: SHORT_LOCK_TIMEOUT_MS, readKafkaLag: NO_KAFKA });
     });
 
     afterAll(() => impatientApp.close());
@@ -419,7 +420,7 @@ describe('request validation', () => {
   });
 
   it('rejects a repeated Idempotency-Key header sent over a real socket', async () => {
-    const server = buildApi({ pool, log, lockTimeoutMs: 1_000 });
+    const server = buildApi({ pool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
     await server.listen({ host: '127.0.0.1', port: 0 });
     const { port } = server.server.address() as AddressInfo;
 
@@ -564,7 +565,7 @@ describe('when PostgreSQL is unreachable', () => {
 
   beforeAll(() => {
     unreachablePool = createPool('postgres://pooleno@127.0.0.1:1/none', log);
-    unreachableApp = buildApi({ pool: unreachablePool, log, lockTimeoutMs: 1_000 });
+    unreachableApp = buildApi({ pool: unreachablePool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
   });
 
   afterAll(async () => {

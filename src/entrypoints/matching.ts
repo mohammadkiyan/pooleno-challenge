@@ -10,9 +10,17 @@ const config = loadMatchingConfig();
 const log = createLogger('matching', config.logLevel);
 
 await runAsSoleOwner(
-  { databaseUrl: config.databaseUrl, lockId: MATCHING_LOCK_ID, log },
-  async ({ signal }) => {
+  {
+    databaseUrl: config.databaseUrl,
+    lockId: MATCHING_LOCK_ID,
+    log,
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+    health: config.health,
+  },
+  async ({ signal, reportReadiness }) => {
     const pool = createPool(config.databaseUrl, log);
+    let assigned = false;
+    reportReadiness(() => Promise.resolve(assigned ? undefined : 'no partitions assigned'));
 
     try {
       await runMatchingConsumer({
@@ -23,6 +31,9 @@ await runAsSoleOwner(
         restartDelayMs: config.restartDelayMs,
         signal,
         log,
+        onAssignmentChange: (value) => {
+          assigned = value;
+        },
       });
     } finally {
       await pool.end();

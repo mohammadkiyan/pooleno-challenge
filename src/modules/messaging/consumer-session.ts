@@ -23,6 +23,8 @@ export interface ConsumerSessionOptions {
   log: Logger;
   /** Resolves once the message is durably handled, which is what lets its offset advance. */
   handle: (message: ConsumedMessage) => Promise<void>;
+  /** Told when this session gains partitions, and when it can no longer process them. */
+  onAssignmentChange?: (assigned: boolean) => void;
 }
 
 /**
@@ -32,7 +34,8 @@ export interface ConsumerSessionOptions {
  * committed afterwards, so the caller can start another session from the committed position.
  */
 export async function runConsumerSession(options: ConsumerSessionOptions): Promise<void> {
-  const { kafka, clientId, groupId, sessionTimeoutMs, signal, log, handle } = options;
+  const { kafka, clientId, groupId, sessionTimeoutMs, signal, log, handle, onAssignmentChange } =
+    options;
 
   const consumer = new Consumer({
     clientId,
@@ -53,6 +56,8 @@ export async function runConsumerSession(options: ConsumerSessionOptions): Promi
 
   let stop = (): void => undefined;
   try {
+    // Closing the consumer does not interrupt a join in flight, so a shutdown that arrives
+    // while this waits out a dead member's session is bounded by the shutdown deadline.
     const stream = await consumer.consume({
       topics: [kafka.topic],
       autocommit: false,
@@ -70,6 +75,7 @@ export async function runConsumerSession(options: ConsumerSessionOptions): Promi
     const isStopped = (): boolean => stopped;
     stop = () => {
       stopped = true;
+      onAssignmentChange?.(false);
       void stream.close();
     };
     // After this the partitions may belong to another member, so this session must end
@@ -85,6 +91,8 @@ export async function runConsumerSession(options: ConsumerSessionOptions): Promi
     signal.addEventListener('abort', stop, { once: true });
     if (signal.aborted) {
       stop();
+    } else {
+      onAssignmentChange?.(hasPartitions(consumer));
     }
 
     for await (const message of stream) {
@@ -110,9 +118,14 @@ export async function runConsumerSession(options: ConsumerSessionOptions): Promi
       });
     }
   } finally {
+    onAssignmentChange?.(false);
     signal.removeEventListener('abort', stop);
     await consumer.close(true).catch((error: unknown) => {
       log.warn({ err: error }, 'closing the kafka consumer failed');
     });
   }
+}
+
+function hasPartitions(consumer: Consumer<string, string, string, string>): boolean {
+  return consumer.assignments?.some(({ partitions }) => partitions.length > 0) ?? false;
 }
