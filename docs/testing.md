@@ -4,7 +4,7 @@
 
 ## Run the tests
 
-`./review.sh` runs all of them in a container and needs only Docker. To run them on the host, with Node.js 26 or newer:
+`./review.sh --full` runs all of them in a container and needs only Docker. To run them on the host, with Node.js 26 or newer:
 
 ```bash
 npm ci
@@ -25,21 +25,21 @@ The engine is also compared with a simple sorted-list reference matcher over 15,
 
 ## Results
 
-From one run of `./review.sh` on 2026-11-01, on Linux, with Node.js 26.13, PostgreSQL 18 and Kafka 4.2.2 in Docker, starting from a copy of the source with no `node_modules` or `dist`:
+From one run of `./review.sh --full` on 2026-11-01, on Linux, with Node.js 26.13, PostgreSQL 18 and Kafka 4.2.2 in Docker, starting from a copy of the source with no `node_modules` or `dist`:
 
 | Step | Result | Time |
 |---|---|---|
 | Typecheck | Clean | 4 s |
-| Linter | Clean | 5 s |
-| Unit tests | 184 passed in 8 files | 8 s |
-| Integration and e2e tests | 199 passed in 13 files | 2 m 56 s |
+| Linter | Clean | 7 s |
+| Unit tests | 211 passed in 10 files | 11 s |
+| Integration and e2e tests | 221 passed in 15 files | 4 m |
 | Walkthrough | 14 of 14 checks passed | Seconds |
 | Crash proof, including the `SIGKILL`s and the restart | 9 of 9 checks passed, and the repeated walkthrough changed nothing | About 30 s, 26 s of it the restart |
-| The whole command | Passed | 4 m 12 s with the images already built |
+| The whole command | Passed | 5 m 23 s with the images already built |
 
-An uncached image build took 44 s, which makes a first run about 5 minutes plus image downloads.
+`./review.sh` without `--full` runs the same walkthrough and crash proof and skips the first four steps. It took 1 m 04 s, including 16 s to build the scenario viewer's image for the first time.
 
-`review.sh` is written for bash 3.2, which macOS ships. Its flow and failure paths also passed under bash 3.2.57 with a stand-in for Docker, but the whole command has only run on Linux.
+`review.sh` is written for bash 3.2, which macOS ships. Its flow and failure paths also passed under bash 3.2.57 with a stand-in for Docker, but the whole command has only run on Linux. It has not run on macOS, or on Windows through Git Bash or WSL.
 
 ## How failures are injected
 

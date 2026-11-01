@@ -184,6 +184,20 @@ services:
       timeout: 2s
       retries: 30
 
+  # The illustrated scenarios. A static page that calls nothing, so it depends on no service.
+  viewer:
+    build: ./extras
+    image: pooleno-scenario-viewer:local
+    # Vite runs as PID 1 otherwise, which ignores SIGTERM and makes every stop wait out the grace period.
+    init: true
+    ports:
+      - "127.0.0.1:${HOST_PORT_VIEWER:-8084}:4173"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
   # Runs the checks and the walkthroughs from inside this network, so that ./review.sh needs
   # nothing but Docker on the host. Started only on request, never by a plain `up`.
   verify:

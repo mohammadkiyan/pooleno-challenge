@@ -2,12 +2,13 @@
 #
 # The one command for a reviewer. It needs only Docker, and leaves the stack running.
 #
-#   ./review.sh               Build, run every check, prove the behaviour, keep the stack up
-#   ./review.sh --skip-tests  The same without the typecheck, lint and test suite
-#   ./review.sh down          Stop the stack and delete its data
+#   ./review.sh         Build, start the stack, prove the behaviour, open the scenario viewer
+#   ./review.sh --full  The same, after the typecheck, lint and whole test suite
+#   ./review.sh down    Stop the stack and delete its data
 #
 # Move a published port that is already taken with HOST_PORT_API, HOST_PORT_PUBLISHER,
-# HOST_PORT_MATCHING, HOST_PORT_EXTERNAL, HOST_PORT_POSTGRES, HOST_PORT_KAFKA or HOST_PORT_MOCK_API.
+# HOST_PORT_MATCHING, HOST_PORT_EXTERNAL, HOST_PORT_POSTGRES, HOST_PORT_KAFKA, HOST_PORT_MOCK_API
+# or HOST_PORT_VIEWER.
 #
 # Written for bash 3.2, which is what macOS ships.
 set -uo pipefail
@@ -117,7 +118,8 @@ check_ports() {
     "HOST_PORT_EXTERNAL:${HOST_PORT_EXTERNAL:-8083}" \
     "HOST_PORT_POSTGRES:${HOST_PORT_POSTGRES:-15432}" \
     "HOST_PORT_KAFKA:${HOST_PORT_KAFKA:-29092}" \
-    "HOST_PORT_MOCK_API:${HOST_PORT_MOCK_API:-18080}"; do
+    "HOST_PORT_MOCK_API:${HOST_PORT_MOCK_API:-18080}" \
+    "HOST_PORT_VIEWER:${HOST_PORT_VIEWER:-8084}"; do
     name=${entry%%:*}
     port=${entry##*:}
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
@@ -158,11 +160,15 @@ print_summary() {
   for item in "${SUMMARY[@]}"; do
     printf '  %sok%s  %s\n' "$GREEN" "$RESET" "$item"
   done
-  if [ -n "${UNIT_TESTS:-}" ]; then
+  if [ "$RUN_TESTS" = true ]; then
     printf '\n  Unit tests:                %s\n' "$UNIT_TESTS"
     printf '  Integration and e2e tests: %s\n' "$DATABASE_TESTS"
+  else
+    printf '\n  The typecheck, lint and test suite did not run. ./review.sh --full adds them, about 4 minutes.\n'
   fi
   cat <<EOF
+
+Scenario viewer: $VIEWER_URL
 
 The stack is still running, and these are worth a look:
 
@@ -176,10 +182,24 @@ Stop and delete: ./review.sh down
 EOF
 }
 
-SKIP_TESTS=false
+# The URL is always printed as well, because a machine with no desktop has nothing to open it in.
+open_viewer() {
+  local opener
+  # xdg-open comes first because some Linux systems also have an unrelated command called open.
+  # explorer.exe covers Git Bash and WSL on Windows.
+  for opener in xdg-open wslview open explorer.exe; do
+    if command -v "$opener" >/dev/null 2>&1; then
+      "$opener" "$VIEWER_URL" >/dev/null 2>&1 &
+      return
+    fi
+  done
+}
+
+VIEWER_URL="http://127.0.0.1:${HOST_PORT_VIEWER:-8084}"
+RUN_TESTS=false
 case "${1:-}" in
   '') ;;
-  --skip-tests) SKIP_TESTS=true ;;
+  --full) RUN_TESTS=true ;;
   down)
     check_docker
     reset_stack || fail 'The stack could not be removed.' 'The Compose output above says why.'
@@ -188,10 +208,10 @@ case "${1:-}" in
     exit 0
     ;;
   -h | --help)
-    sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
     ;;
-  *) fail "Unknown argument: $1" 'Use ./review.sh, ./review.sh --skip-tests or ./review.sh down.' ;;
+  *) fail "Unknown argument: $1" 'Use ./review.sh, ./review.sh --full or ./review.sh down.' ;;
 esac
 
 check_docker
@@ -205,7 +225,7 @@ step 'Remove any earlier run of this project' reset reset_stack
 check_ports
 step 'Build the images' build compose_with_checks build
 
-if [ "$SKIP_TESTS" = false ]; then
+if [ "$RUN_TESTS" = true ]; then
   step 'Typecheck' typecheck in_verify npm run typecheck
   step 'Lint' lint in_verify npm run lint
   step 'Unit tests' test-unit in_verify npm run test:unit
@@ -232,3 +252,4 @@ step 'Run the walkthrough again, with the same keys' demo-after-crash in_verify 
 compare_demo_runs
 
 print_summary
+open_viewer

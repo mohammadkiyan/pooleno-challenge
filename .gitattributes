@@ -1,0 +1,2 @@
+# Keep LF on every system. Git for Windows usually converts to CRLF on checkout, and bash can't run review.sh with CRLF.
+* text=auto eol=lf

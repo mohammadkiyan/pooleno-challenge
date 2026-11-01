@@ -10,14 +10,17 @@ You need Docker with the Compose plugin, and nothing else, not even Node.js:
 ./review.sh
 ```
 
-It takes about 5 minutes, plus image downloads the first time. Starting from nothing, it does the following, stops at the first failure and tells you where to look:
+On macOS and Linux, run it in any terminal. On Windows, run it in Git Bash or WSL, because PowerShell and Command Prompt can't run it. Start Docker Desktop first on macOS and Windows.
+
+It takes about a minute, plus image downloads and builds the first time. Starting from nothing, it does the following, stops at the first failure and tells you where to look:
 
 1. Builds the images.
-2. Runs the typecheck, the linter and all tests, against real PostgreSQL and real Kafka.
-3. Starts the whole stack.
-4. Walks through the acceptance contract, a price-time matching fixture and the external notification, checking every answer.
-5. Proves the crash guarantees with real `SIGKILL`s: it kills the publisher, gets a `202` for an order, then kills every process including PostgreSQL and Kafka. After the restart, that order has matched and notified, the rebuilt book kept its queue and remainders, and no effect repeated.
-6. Leaves the stack running for you to try.
+2. Starts the whole stack.
+3. Walks through the acceptance contract, a price-time matching fixture and the external notification, checking every answer.
+4. Proves the crash guarantees with real `SIGKILL`s: it kills the publisher, gets a `202` for an order, then kills every process including PostgreSQL and Kafka. After the restart, that order has matched and notified, the rebuilt book kept its queue and remainders, and no effect repeated.
+5. Leaves the stack running for you to try, and opens the [scenario viewer](http://127.0.0.1:8084) in your browser. The URL is printed too, in case no browser opens.
+
+To run the typecheck, the linter and all tests as well, against real PostgreSQL and real Kafka, use `./review.sh --full`. That adds about 4 minutes.
 
 A passing run ends like this:
 
@@ -32,16 +35,15 @@ Crash proof: after the restart
 Run the walkthrough again, with the same keys      ok (1s)
   ok  The same orders, trades and effect as before the crash, and nothing new
 
-ALL CHECKS PASSED in 4m 12s
+ALL CHECKS PASSED in 1m 04s
 ...
-  Unit tests:                184 passed
-  Integration and e2e tests: 199 passed
+Scenario viewer: http://127.0.0.1:8084
 ```
 
 | Command | What it does |
 |---|---|
 | `./review.sh` | Everything above |
-| `./review.sh --skip-tests` | The same without the typecheck, linter and tests, in about a minute after the first build |
+| `./review.sh --full` | The same, after the typecheck, linter and all tests: 211 unit tests and 221 integration and e2e tests |
 | `./review.sh down` | Stops the stack and deletes its data |
 
 `./review.sh` first deletes this Compose project's containers and volumes, and touches nothing else. If a port is taken, it names the port and the variable that moves it, such as `HOST_PORT_API=9080 ./review.sh`.
@@ -91,7 +93,7 @@ The walkthrough leaves sell orders resting at 100 on `ETH-USD`, so this one trad
 - [Testing](docs/testing.md): how to run the tests, the results, and every injected failure with what it proves.
 - [ADRs](docs/adr): the reasoning and evidence behind [tooling and budgets](docs/adr/0001-tooling-and-budgets.md), [messaging and matching](docs/adr/0002-messaging-and-matching.md), [external notifications](docs/adr/0003-external-notifications.md), [shutdown, health and visibility](docs/adr/0004-shutdown-health-and-visibility.md), and [NestJS on Fastify](docs/adr/0005-nestjs-on-fastify.md).
 
-[extras/](extras) holds an optional illustrated scenario viewer. Nothing here depends on it, and you can review the project without it.
+[extras/](extras) holds the scenario viewer that `./review.sh` opens. It illustrates the main scenarios and their edge cases with authored examples, not live traffic, and the backend doesn't depend on it.
 
 ## Develop on the host
 

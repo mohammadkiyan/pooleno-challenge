@@ -256,6 +256,7 @@ Every published port is bound to loopback. If one is taken, set its variable for
 | `HOST_PORT_POSTGRES` | PostgreSQL | `15432` |
 | `HOST_PORT_KAFKA` | Kafka | `29092` |
 | `HOST_PORT_MOCK_API` | Mock destination | `18080` |
+| `HOST_PORT_VIEWER` | Scenario viewer | `8084` |
 
 ### Process settings
 

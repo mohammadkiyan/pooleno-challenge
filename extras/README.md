@@ -1,6 +1,6 @@
-# Optional extras
+# Scenario viewer
 
-This directory contains optional supporting material outside the main code challenge scope. Reviewers can evaluate the challenge without setting up anything here.
+`./review.sh` from the repository root builds this viewer in Docker, serves it at [127.0.0.1:8084](http://127.0.0.1:8084) and opens it in your browser, so reviewers need nothing else. The steps under [Run](#run) are for working on the viewer itself.
 
 ## Scenario viewer
 
