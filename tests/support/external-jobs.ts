@@ -33,14 +33,15 @@ export async function countJobs(pool: Pool): Promise<number | undefined> {
 
 export async function readQuarantine(pool: Pool) {
   const { rows } = await pool.query<{
+    consumer: string;
     topic: string;
     kafka_partition: number;
     kafka_offset: string;
     raw_value: Buffer;
     error: string;
   }>(
-    `SELECT topic, kafka_partition, kafka_offset, raw_value, error
-       FROM external_quarantine ORDER BY kafka_offset`,
+    `SELECT consumer, topic, kafka_partition, kafka_offset, raw_value, error
+       FROM quarantine ORDER BY kafka_offset, id`,
   );
   return rows;
 }

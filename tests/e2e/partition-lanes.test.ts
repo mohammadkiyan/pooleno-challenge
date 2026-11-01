@@ -9,6 +9,7 @@ import {
   readTopic,
   type TestStream,
 } from '../support/kafka.js';
+import { readQuarantine } from '../support/external-jobs.js';
 import { acceptEvent, ethOrder, validOrder } from '../support/orders.js';
 import {
   CLEAN_EXIT,
@@ -141,12 +142,10 @@ describe('matching with one lane per partition', () => {
 
   it('holds only the partition of a failing event, and reports it through readiness', async () => {
     const ethSell = await acceptEvent(pool, ethOrder('SELL', '100.00', '0.0020'));
-    const btc = await acceptEvent(pool, BTC_SELL);
-    await produceRaw(stream, [
-      { key: 'BTC-USD', value: 'not an event' },
-      { key: 'BTC-USD', value: JSON.stringify(btc) },
-      { key: 'ETH-USD', value: JSON.stringify(ethSell) },
-    ]);
+    const btcFirst = await acceptEvent(pool, BTC_SELL);
+    const btcSecond = await acceptEvent(pool, BTC_SELL);
+    // BTC's second event arrives first, so the sequence guard fails until it is moved past.
+    await produceEvents([btcSecond, btcFirst, btcSecond, ethSell]);
     await assertSymbolsOnDifferentPartitions();
 
     const matcher = startMatching();
@@ -154,7 +153,7 @@ describe('matching with one lane per partition', () => {
     await waitForStatus(ethSell.orderId, 'OPEN');
     await matcher.waitForLog(HELD_LOG, 2);
 
-    expect(await readOrder(pool, btc.orderId)).toMatchObject({ status: 'QUEUED' });
+    expect(await readOrder(pool, btcFirst.orderId)).toMatchObject({ status: 'QUEUED' });
     expect(await committedMessages(stream)).toBe(1);
     expect(matcher.countLogs(SESSION_FAILURE_LOG)).toBe(0);
     await eventually(async () => {
@@ -168,11 +167,97 @@ describe('matching with one lane per partition', () => {
     // The operator's existing repair still works.
     expect(await matcher.terminate()).toMatchObject({ code: 0 });
     const messages = await readTopic(stream);
-    const poison = messages.find(({ value }) => value === 'not an event');
-    await moveCommittedOffset(stream, poison?.partition ?? 0, 1n);
+    const held = messages.find(({ key }) => key === 'BTC-USD');
+    await moveCommittedOffset(stream, held?.partition ?? 0, 1n);
 
     startMatching();
-    await waitForStatus(btc.orderId, 'OPEN');
+    await waitForStatus(btcSecond.orderId, 'OPEN');
+    expect(await readOrder(pool, btcFirst.orderId)).toMatchObject({ status: 'OPEN' });
+  });
+
+  describe('a message that cannot be read as an event', () => {
+    it('is quarantined, and the orders behind it on its partition still trade', async () => {
+      const btcSell = await acceptEvent(pool, BTC_SELL);
+      const btcBuy = await acceptEvent(pool, BTC_BUY);
+      const ethSell = await acceptEvent(pool, ethOrder('SELL', '100.00', '0.0020'));
+      await produceRaw(stream, [
+        { key: 'BTC-USD', value: JSON.stringify(btcSell) },
+        { key: 'BTC-USD', value: 'not an event' },
+        { key: 'BTC-USD', value: JSON.stringify(btcBuy) },
+        { key: 'ETH-USD', value: JSON.stringify(ethSell) },
+      ]);
+
+      const matcher = startMatching();
+      const url = await healthUrlOf(matcher);
+
+      await waitForStatus(btcBuy.orderId, 'FILLED');
+      await waitForStatus(ethSell.orderId, 'OPEN');
+      await eventually(async () => {
+        expect(await committedMessages(stream)).toBe(4);
+        expect((await readHealth(url, '/health/ready')).status).toBe(200);
+      });
+
+      const rows = await readQuarantine(pool);
+      expect(rows.map(({ consumer, kafka_offset: offset, raw_value: value }) => ({
+        consumer,
+        offset,
+        value: value.toString(),
+      }))).toEqual([{ consumer: 'matching-v1', offset: '1', value: 'not an event' }]);
+      expect(await readTrades(pool)).toHaveLength(1);
+      expect(matcher.countLogs(HELD_LOG)).toBe(0);
+      expect(matcher.countLogs(SESSION_FAILURE_LOG)).toBe(0);
+    });
+
+    it('holds its partition until it is durably recorded', async () => {
+      const btc = await acceptEvent(pool, BTC_SELL);
+      await pool.query(`
+        CREATE OR REPLACE FUNCTION fail_quarantine() RETURNS trigger LANGUAGE plpgsql AS
+          $$ BEGIN RAISE EXCEPTION 'the database refused the write'; END $$;
+        CREATE TRIGGER fail_quarantine BEFORE INSERT ON quarantine
+          FOR EACH ROW EXECUTE FUNCTION fail_quarantine();
+      `);
+
+      try {
+        await produceRaw(stream, [
+          { key: 'BTC-USD', value: 'not an event' },
+          { key: 'BTC-USD', value: JSON.stringify(btc) },
+        ]);
+
+        const matcher = startMatching();
+        await matcher.waitForLog(HELD_LOG, 2);
+        expect(await committedMessages(stream)).toBe(0);
+        expect(await readOrder(pool, btc.orderId)).toMatchObject({ status: 'QUEUED' });
+
+        await pool.query('DROP TRIGGER fail_quarantine ON quarantine');
+
+        await waitForStatus(btc.orderId, 'OPEN');
+        await matcher.waitForLog('partition released');
+        expect(await readQuarantine(pool)).toHaveLength(1);
+      } finally {
+        await pool.query(`
+          DROP TRIGGER IF EXISTS fail_quarantine ON quarantine;
+          DROP FUNCTION IF EXISTS fail_quarantine;
+        `);
+      }
+    });
+
+    it('cannot lose a real order, because the sequence guard stops at the next event', async () => {
+      const damaged = await acceptEvent(pool, BTC_SELL);
+      const next = await acceptEvent(pool, BTC_SELL);
+      await produceRaw(stream, [
+        { key: 'BTC-USD', value: JSON.stringify(damaged).slice(0, 20) },
+        { key: 'BTC-USD', value: JSON.stringify(next) },
+      ]);
+
+      const matcher = startMatching();
+
+      await matcher.waitForLog(HELD_LOG, 2);
+      expect(await readQuarantine(pool)).toHaveLength(1);
+      expect(await committedMessages(stream)).toBe(1);
+      expect(await readOrder(pool, damaged.orderId)).toMatchObject({ status: 'QUEUED' });
+      expect(await readOrder(pool, next.orderId)).toMatchObject({ status: 'QUEUED' });
+      expect(await readProgress(pool, 'BTC-USD')).toBeUndefined();
+    });
   });
 
   it('restores only the failing book and retries, with no repeated trade', async () => {

@@ -107,9 +107,16 @@ Only then is the match applied to the book, and only then is the offset committe
 - A rebalance, a rejoin or a shutdown ends the session and suppresses any further commit. The redelivery that follows is a no-op through the Inbox. An uncommitted durable result is safe, and a commit made after losing a partition is not.
 - A session that ends for any reason discards its book. The next session restores from the database, so a book never outlives the group membership it was built under.
 
-**One lane per partition:** one process consumes all partitions, and each partition handles its messages one at a time while the others proceed. A poison event or a gap holds its own partition, restoring the affected book and retrying without committing, so the symbols on other partitions continue. The block the handoff requires still applies to everything behind the event on that partition. The one-active-matcher lock is unchanged. The session waits for every lane before it ends, so no transaction overlaps the next session.
+**One lane per partition:** one process consumes all partitions, and each partition handles its messages one at a time while the others proceed. A gap or a failing event holds its own partition, restoring the affected book and retrying without committing, so the symbols on other partitions continue. Everything behind the event on that partition waits. The one-active-matcher lock is unchanged. The session waits for every lane before it ends, so no transaction overlaps the next session.
 
 **Bounded lanes:** each lane buffers at most `MATCHING_LANE_CAPACITY` messages. The client delivers all partitions through one stream and can pause only all of it, so a full lane holds back every partition until it has room. Dropping and refetching the excess would keep the others moving, but it relies on internals of the client. With the default of 10,000, the other partitions stall only after that many messages wait behind one stuck or slow event.
+
+## Decision: unreadable messages
+
+A message that fails `parseOrderAccepted` can never succeed, so retrying it would only stop its partition. Matching saves it to the `quarantine` dead-letter table and then advances the offset. If that write fails, the partition holds until it succeeds. Only parse failures are treated this way: a database failure on a valid event is retried, because that event is a real order.
+
+- **A real order cannot be silently lost:** if a damaged message was an accepted order, the next valid event for that symbol hits the sequence guard, and the symbol holds until the [lost-event procedure](#operator-procedures) sends the order again from the Outbox.
+- **What has no next event to trip the guard:** a damaged order that is its symbol's latest, or every event of a future `schemaVersion` published before matching is upgraded. These orders stay `QUEUED`, and `matching.lag` and `matching.quarantined` in `GET /ops/backlog` show them. The same procedure recovers them. Upgrade matching before the publisher.
 
 ## Decision: trades in `GET`
 
@@ -117,19 +124,7 @@ Only then is the match applied to the book, and only then is the offset committe
 
 ## Operator procedures
 
-Both block matching on purpose, and the error log names the position or sequence involved.
-
-**A malformed event.** The event can never succeed, so the group must move past it.
-
-```bash
-docker compose stop matching
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server kafka:19092 --group matching-v1 \
-  --topic orders.accepted:<partition> --reset-offsets --to-offset <offset + 1> --execute
-docker compose start matching
-```
-
-Skipping is safe only for a message that is not a real event. If an accepted order was damaged, the next valid event for that symbol hits the sequence guard, which leads to the next procedure.
+A sequence gap blocks matching on purpose, and the error log names the sequence involved. Quarantined messages need no repair to keep matching moving, and are inspected under the [quarantine procedure](0003-phase-3-external-notifications.md#operator-procedures).
 
 **Lost or missing events.** The Outbox still holds every accepted event, so the publisher can send those again. Retention can remove an older event while newer ones remain, and the client then moves an expired position to the oldest record it still has. Matching blocks there on the sequence guard, ahead of anything republished, so the group must move to the end of the topic first. Everything unapplied is then sent again behind that position, in order, and the publisher must be stopped throughout so that no new event lands ahead of its predecessors.
 

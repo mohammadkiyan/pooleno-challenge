@@ -91,10 +91,10 @@ Offsets are committed by hand, as `offset + 1`, and only after the event's work 
 | Failure | Behavior | Limit |
 |---|---|---|
 | Kafka send fails | The event stays in the Outbox, and its symbol waits. The delay doubles from 500 ms to 30 s | None. It retries for as long as the outage lasts |
-| Matching event fails | Only its partition is held. The role restores that event's book, waits 1 s, and retries it without committing. Other partitions continue | None. A bad event holds its partition until an operator acts |
+| Matching event fails | Only its partition is held. The role restores that event's book, waits 1 s, and retries it without committing. Other partitions continue | None. It retries until the failure clears or an operator acts |
 | Matching session fails | A Kafka failure discards every book. The role waits 1 s, restores, and starts again | None |
-| Sequence gap, or a malformed message at matching | Holds its partition with an error. Later orders depend on this one, so it can't be skipped | Needs the [operator procedure](adr/0002-phase-2-messaging-and-matching.md#operator-procedures) |
-| Malformed message at the external role | Quarantined durably, then skipped. Notifications don't depend on each other | Inspected under the [quarantine procedure](adr/0003-phase-3-external-notifications.md#operator-procedures) |
+| Sequence gap at matching | Holds its partition with an error. Later orders depend on the missing one, so it can't be skipped | Needs the [operator procedure](adr/0002-phase-2-messaging-and-matching.md#operator-procedures) |
+| Malformed message at either consumer | Saved to the `quarantine` dead-letter table, then skipped. If it was a real order, the sequence guard stops its symbol at the next event | Inspected under the [quarantine procedure](adr/0003-phase-3-external-notifications.md#operator-procedures) |
 | Destination fails transiently | The job retries with jitter and honours `Retry-After`. The delay doubles from 1 s to 5 min | 400 attempts, about a day, then `FAILED` |
 | Destination rejects permanently | The job is `FAILED` at once, for a manual redrive under the same key | Needs an operator |
 
@@ -188,7 +188,7 @@ The ownership roles also report `shutting down`. The API stops listening instead
 | Which symbols are held back? | `outbox.blockedSymbols` |
 | How many accepted orders are unmatched, and for how long? | `matching.lag`, `matching.symbols` |
 | Are notifications behind or stuck? | `external.pending`, `external.retrying`, `external.oldestPendingAgeMs`, `external.failed` |
-| Did a message get set aside? | `external.quarantined` |
+| Did a message get set aside? | `matching.quarantined`, `external.quarantined` |
 | How far is each group behind the topic? | `kafka.groups` |
 
 Matching lag and Kafka lag answer different questions. Matching lag counts every accepted order not yet applied, including those still in the Outbox. Kafka lag counts only what reached the topic, so during an outage it can read zero while matching lag grows.

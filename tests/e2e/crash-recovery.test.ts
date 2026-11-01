@@ -8,7 +8,6 @@ import {
   createTestStream,
   deleteTestStream,
   joinAsRival,
-  moveCommittedOffset,
   moveCommittedOffsetsToEnd,
   readTopic,
   type TestStream,
@@ -525,7 +524,7 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
       expect(await readTrades(pool)).toHaveLength(1);
     });
 
-    it('blocks on a malformed message until an operator moves past it', async () => {
+    it('quarantines a malformed message and applies the order behind it', async () => {
       const producer = createEventProducer(stream.kafka);
       await producer.send({ key: 'ETH-USD', value: 'not an event' });
       await producer.close();
@@ -535,18 +534,10 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
       await waitForPublished(order.eventId);
       const matcher = startRole('matching');
 
-      await matcher.waitForLog('partition held; restoring its book before retrying', 2);
-      expect(await readOrder(pool, order.orderId)).toMatchObject({ status: 'QUEUED' });
-      expect(await readProgress(pool, 'ETH-USD')).toBeUndefined();
-      expect(await committedMessages(stream)).toBe(0);
-
-      expect(await matcher.terminate()).toEqual(CLEAN_EXIT);
-      const [poison] = await readTopic(stream);
-      await moveCommittedOffset(stream, poison?.partition ?? 0, 1n);
-
-      startRole('matching');
       await waitForStatus(order.orderId, 'OPEN');
       await waitForCommittedMessages(2);
+      expect(matcher.countLogs('malformed message quarantined')).toBe(1);
+      expect(matcher.countLogs('partition held; restoring its book before retrying')).toBe(0);
     });
 
     it('recovers a lost event from the Outbox by the documented procedure', async () => {

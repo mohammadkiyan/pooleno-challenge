@@ -2,10 +2,9 @@ import type { Pool } from 'pg';
 import type { Logger } from 'pino';
 import type { KafkaConfig } from '../../app/config.js';
 import { pause } from '../../infrastructure/pause.js';
-import { quarantineMessage } from '../external/external-job.repository.js';
-import { scheduleNotification } from '../external/schedule-notification.js';
+import { EXTERNAL_CONSUMER_NAME, scheduleNotification } from '../external/schedule-notification.js';
 import { runConsumerSession, type ConsumedMessage } from './consumer-session.js';
-import { parseOrderAccepted, type OrderAcceptedV1 } from './order-accepted.schema.js';
+import { parseOrQuarantine } from './quarantine.js';
 
 export interface ExternalConsumerOptions {
   pool: Pool;
@@ -47,15 +46,8 @@ export async function runExternalConsumer(options: ExternalConsumerOptions): Pro
 }
 
 async function handleMessage(pool: Pool, message: ConsumedMessage, log: Logger): Promise<void> {
-  let event: OrderAcceptedV1;
-  try {
-    event = parseOrderAccepted(message.value);
-  } catch (error) {
-    await quarantineMessage(pool, message, String(error));
-    log.error(
-      { topic: message.topic, partition: message.partition, offset: String(message.offset) },
-      'malformed message quarantined',
-    );
+  const event = await parseOrQuarantine(pool, EXTERNAL_CONSUMER_NAME, message, log);
+  if (!event) {
     return;
   }
 

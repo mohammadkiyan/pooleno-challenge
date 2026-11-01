@@ -71,14 +71,13 @@ No result touches the order. The role never writes to `orders`, so infrastructur
 
 ## Decision: malformed events
 
-The handoff allows quarantine here, under a documented policy, and requires matching to block instead.
+**Policy:** a message that fails `parseOrderAccepted` is written to `quarantine`, the system's dead-letter table, with its consumer, topic, partition, offset, raw value and error, and only then does the offset advance. If that write fails, the offset holds and the session restarts. This covers invalid JSON, a tombstone, a wrong shape and a future `schemaVersion`.
 
-**Policy:** a message that fails `parseOrderAccepted` is written to `external_quarantine` with its topic, partition, offset, raw value and error, and only then does the offset advance. If that write fails, the offset holds and the session restarts. This covers invalid JSON, a tombstone, a wrong shape and a future `schemaVersion`.
-
-- **Why not block:** matching blocks because every later event depends on the one before it. Notifications do not depend on each other, so blocking would hold back good notifications and protect nothing.
-- **Matching is unaffected:** the groups keep separate offsets, so the same message still blocks matching until it is repaired under [ADR 0002](0002-phase-2-messaging-and-matching.md#operator-procedures).
+- **Why not block:** notifications do not depend on each other, so blocking would hold back good notifications and protect nothing.
+- **Why a table, not a Kafka topic:** PostgreSQL is already a dependency, and a dead-letter topic would need its own producer and failure handling for the same result.
+- **Matching uses the same policy:** the groups keep separate offsets, so each records the message under its own consumer name. See [ADR 0002](0002-phase-2-messaging-and-matching.md#decision-unreadable-messages).
 - **No notification is sent** for a quarantined message.
-- **Positions are not unique,** because a crash between the insert and the offset commit records the message twice. Quarantine is only for inspection, so that is harmless.
+- **A redelivery adds no second row:** a crash between the insert and the offset commit replays the message, and a unique key on the consumer, position and a hash of the value absorbs it. The hash keeps a different message at a reused position, because Kafka's offsets restart if its data is lost.
 - **`raw_value` is close to the original, not exact:** the consumer reads values as UTF-8, so invalid sequences appear as replacement characters. The recorded position finds the original in Kafka while it is retained.
 
 ## Decision: the mock destination
@@ -110,7 +109,7 @@ The conclusion is that a retry cannot repeat the effect, for as long as the dest
 The conclusion is that the two workflows can delay each other only through what they already share, PostgreSQL and Kafka's availability.
 
 - **Separate progress:** each group has its own offsets, and the Inbox name is fixed per consumer, so neither one's handled events can be mistaken for the other's.
-- **No shared writes:** the role reads and writes only `consumer_inbox` under its own name, `external_jobs` and `external_quarantine`. Matching reads none of those.
+- **No shared writes:** the role reads and writes only `consumer_inbox` under its own name, `external_jobs` and its own rows in `quarantine`. Matching reads none of those, and writes only its own `quarantine` rows, which never conflict with this role's.
 - **Proven in both directions:** matching continues through a destination outage, and a notification is delivered for an event that matching is blocked behind.
 - **Shared code:** `matching-consumer.ts` now uses the same `consumer-session.ts`. Its rules did not change and its tests still pass.
 - **Acceptance, not matching:** a notification can arrive before the order is matched, as agreed, and says nothing about the outcome.
@@ -124,8 +123,9 @@ docker compose exec postgres psql -U pooleno -d pooleno -c "
   SELECT event_id, attempts, completed_at, last_error
     FROM external_jobs WHERE status = 'FAILED' ORDER BY completed_at;"
 docker compose exec postgres psql -U pooleno -d pooleno -c "
-  SELECT topic, kafka_partition, kafka_offset, encode(raw_value, 'escape') AS raw_value, error
-    FROM external_quarantine ORDER BY id;"
+  SELECT consumer, topic, kafka_partition, kafka_offset,
+         encode(raw_value, 'escape') AS raw_value, error
+    FROM quarantine ORDER BY id;"
 ```
 
 **Redrive failed jobs.** This returns them to `PENDING` with a new budget of attempts, the same event, key and payload, and `last_error` kept until the next result. It refuses a job that has not failed, and exits with status 1 if any ID did nothing.

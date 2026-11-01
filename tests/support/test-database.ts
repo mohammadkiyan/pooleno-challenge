@@ -7,7 +7,7 @@ export const TEST_DATABASE_URL =
 export async function resetDatabase(pool: Pool): Promise<void> {
   await pool.query(
     `TRUNCATE outbox_events, idempotency_requests, orders, symbol_sequences,
-              consumer_inbox, matching_progress, trades, external_jobs, external_quarantine`,
+              consumer_inbox, matching_progress, trades, external_jobs, quarantine`,
   );
 }
 

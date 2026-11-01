@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { withSnapshot } from '../../infrastructure/transaction.js';
+import { EXTERNAL_CONSUMER_NAME } from '../external/schedule-notification.js';
+import { MATCHING_CONSUMER_NAME } from '../matching/apply-accepted-order.js';
 
 export interface BlockedSymbol {
   symbol: string;
@@ -27,6 +29,7 @@ export interface Backlog {
     lag: number;
     /** Only the symbols that are behind. */
     symbols: SymbolLag[];
+    quarantined: number;
   };
   external: {
     pending: number;
@@ -119,7 +122,16 @@ async function readMatching(tx: PoolClient): Promise<Backlog['matching']> {
     lag: Number(row.lag),
     oldestUnappliedAgeMs: toAge(row.oldest_age_ms),
   }));
-  return { lag: symbols.reduce((total, { lag }) => total + lag, 0), symbols };
+  const quarantine = await tx.query<{ quarantined: number }>(
+    'SELECT count(*)::int AS quarantined FROM quarantine WHERE consumer = $1',
+    [MATCHING_CONSUMER_NAME],
+  );
+
+  return {
+    lag: symbols.reduce((total, { lag }) => total + lag, 0),
+    symbols,
+    quarantined: (quarantine.rows[0] as { quarantined: number }).quarantined,
+  };
 }
 
 async function readExternal(tx: PoolClient): Promise<Backlog['external']> {
@@ -133,7 +145,7 @@ async function readExternal(tx: PoolClient): Promise<Backlog['external']> {
   }>(
     `SELECT due.pending, due.retrying, due.oldest_age_ms,
             (SELECT count(*)::int FROM external_jobs WHERE status = 'FAILED') AS failed,
-            (SELECT count(*)::int FROM external_quarantine) AS quarantined
+            (SELECT count(*)::int FROM quarantine WHERE consumer = $1) AS quarantined
        FROM (
          SELECT count(*)::int AS pending,
                 count(*) FILTER (WHERE attempts > 0)::int AS retrying,
@@ -141,6 +153,7 @@ async function readExternal(tx: PoolClient): Promise<Backlog['external']> {
            FROM external_jobs
           WHERE status = 'PENDING'
        ) due`,
+    [EXTERNAL_CONSUMER_NAME],
   );
 
   const row = rows[0] as (typeof rows)[number];

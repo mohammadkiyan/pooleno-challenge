@@ -268,7 +268,8 @@ curl -s http://127.0.0.1:8080/ops/backlog
   },
   "matching": {
     "lag": 1,
-    "symbols": [{ "symbol": "ETH-USD", "lag": 1, "oldestUnappliedAgeMs": 10053 }]
+    "symbols": [{ "symbol": "ETH-USD", "lag": 1, "oldestUnappliedAgeMs": 10053 }],
+    "quarantined": 0
   },
   "external": { "pending": 0, "retrying": 0, "failed": 0, "oldestPendingAgeMs": null, "quarantined": 0 },
   "kafka": { "available": false }
@@ -409,7 +410,9 @@ The tables list each failure and its result.
 | Book disagrees with the database | The test changes a maker's row | The transaction aborts with nothing written |
 | `SIGTERM` during a transaction | The test holds the progress row, then sends `SIGTERM` and releases it | The transaction finishes, the exit is clean, no offset passes durable work, and the restart is a no-op |
 | Rebalance during a transaction | A rival consumer joins the group while the transaction is parked | No offset is committed afterwards, and the redelivery is a no-op |
-| Malformed message | The test produces one directly to the topic | Later events on its partition wait with no state change, until an operator moves the offset past it. Other partitions continue |
+| Malformed message | The test produces one directly to the topic | It is quarantined, and the orders behind it on its partition still trade |
+| Quarantine write fails | A database trigger raises on the insert | The partition holds until the message is recorded |
+| Damaged real order | The test produces a truncated event, with a valid one behind it | It is quarantined, and the sequence guard then holds its symbol rather than skip the order |
 | Blocked database write | The test holds BTC's progress row | ETH on another partition finishes while BTC waits, and BTC then completes in order |
 | Repeated failure on one symbol | A trigger rejects BTC's trades | Only BTC's partition is held and readiness is false. ETH finishes, with no session restart, and BTC completes once the failure clears |
 | Lost Kafka event | The test marks an event as published without sending it, with a later event behind it in the topic | Matching blocks rather than skips. The operator procedure republishes unapplied events from the Outbox, and matching resumes in order with no repeated trade |
@@ -423,7 +426,7 @@ The tables list each failure and its result.
 | Crash during the call | `SIGKILL` of the worker while the mock withholds its answer | The next owner reclaims the job, with one effect |
 | Crash after the answer, before recording it | A preload that sends `SIGKILL` just before the result is written | The job is still due with no attempt used, and the retry is replayed, with one effect |
 | Destination outage | The mock is not running | Matching continues, and attempts and due times survive a restart of the role |
-| Matching blocked | A malformed event holds its partition in matching | Valid events behind it are still notified, because the groups are separate |
+| Matching blocked | A sequence gap holds its partition in matching | Valid events behind it are still notified, because the groups are separate |
 | Kafka unreachable | The role points at a closed port | Existing jobs are still delivered |
 | Retries exhausted | The mock is not running, with a small budget | The job is `FAILED`, and the order is unchanged |
 | Crash inside the handoff | The test holds the Inbox row to park the transaction, then sends `SIGKILL` | No job and no offset are kept, and the restart delivers once |

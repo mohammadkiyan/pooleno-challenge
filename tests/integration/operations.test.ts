@@ -9,11 +9,15 @@ import { createPool } from '../../src/infrastructure/db.js';
 import {
   findDueJobs,
   markJobFailed,
-  quarantineMessage,
   scheduleJobRetry,
 } from '../../src/modules/external/external-job.repository.js';
-import { scheduleNotification } from '../../src/modules/external/schedule-notification.js';
+import {
+  EXTERNAL_CONSUMER_NAME,
+  scheduleNotification,
+} from '../../src/modules/external/schedule-notification.js';
+import { MATCHING_CONSUMER_NAME } from '../../src/modules/matching/apply-accepted-order.js';
 import { recordSendFailure } from '../../src/modules/messaging/outbox.repository.js';
+import { quarantineMessage } from '../../src/modules/messaging/quarantine.js';
 import type { OrderAcceptedV1 } from '../../src/modules/messaging/order-accepted.schema.js';
 import { readBacklog } from '../../src/modules/operations/backlog.repository.js';
 import { readKafkaLag, type GroupLag } from '../../src/modules/operations/kafka-lag.js';
@@ -68,7 +72,7 @@ describe('the backlog report', () => {
         totalAttempts: 0,
         blockedSymbols: [],
       },
-      matching: { lag: 0, symbols: [] },
+      matching: { lag: 0, symbols: [], quarantined: 0 },
       external: {
         pending: 0,
         retrying: 0,
@@ -177,7 +181,7 @@ describe('the backlog report', () => {
         'ETH-USD',
       ]);
 
-      expect((await readBacklog(pool)).matching).toEqual({ lag: 0, symbols: [] });
+      expect((await readBacklog(pool)).matching).toEqual({ lag: 0, symbols: [], quarantined: 0 });
     });
   });
 
@@ -195,15 +199,20 @@ describe('the backlog report', () => {
         retryDelayMs: 60_000,
       });
       await markJobFailed(pool, await dueJob(failed.eventId), SECRET_ERROR);
+      const message = { topic: 'orders.accepted', partition: 0, offset: 7n, value: 'not an event' };
+      await quarantineMessage(pool, EXTERNAL_CONSUMER_NAME, message, SECRET_ERROR);
+      await quarantineMessage(pool, MATCHING_CONSUMER_NAME, message, SECRET_ERROR);
       await quarantineMessage(
         pool,
-        { topic: 'orders.accepted', partition: 0, offset: 7n, value: 'not an event' },
+        MATCHING_CONSUMER_NAME,
+        { ...message, offset: 8n },
         SECRET_ERROR,
       );
 
-      const { external } = await readBacklog(pool);
+      const { external, matching } = await readBacklog(pool);
 
       expect(external).toMatchObject({ pending: 2, retrying: 1, failed: 1, quarantined: 1 });
+      expect(matching.quarantined).toBe(2);
       expect(external.oldestPendingAgeMs).toBeGreaterThanOrEqual(3_600_000);
       expect(JSON.stringify(external)).not.toContain('hunter2');
     });

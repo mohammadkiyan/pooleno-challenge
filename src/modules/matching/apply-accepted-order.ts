@@ -8,7 +8,7 @@ import { OrderBook } from './order-book.js';
 import type { OrderBooks } from './restore-book.js';
 
 /** Fixed, so that a new Kafka group replaying the topic still recognises handled events. */
-const MATCHING_CONSUMER_NAME = 'matching-v1';
+export const MATCHING_CONSUMER_NAME ='matching-v1';
 
 /**
  * Applies one accepted order: the match is computed from the book, committed to the

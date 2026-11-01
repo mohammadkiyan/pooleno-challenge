@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { toStoredError } from '../../infrastructure/stored-error.js';
 
 export interface DueJob {
   eventId: string;
@@ -13,13 +14,6 @@ export interface DueJob {
     symbol: string | null;
     acceptanceSequence: string | null;
   };
-}
-
-const MAX_STORED_ERROR_LENGTH = 500;
-
-/** Text from outside this system can contain NUL, which PostgreSQL refuses in a text column. */
-function toStoredError(error: string): string {
-  return error.replaceAll('\0', '').slice(0, MAX_STORED_ERROR_LENGTH);
 }
 
 export async function insertExternalJob(
@@ -129,22 +123,4 @@ export async function redriveJob(pool: Pool, eventId: string): Promise<boolean> 
     [eventId],
   );
   return rowCount === 1;
-}
-
-export async function quarantineMessage(
-  pool: Pool,
-  message: { topic: string; partition: number; offset: bigint; value: string },
-  error: string,
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO external_quarantine (topic, kafka_partition, kafka_offset, raw_value, error)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [
-      message.topic,
-      message.partition,
-      message.offset.toString(),
-      Buffer.from(message.value),
-      toStoredError(error),
-    ],
-  );
 }

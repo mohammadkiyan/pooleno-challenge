@@ -70,7 +70,7 @@ afterEach(async () => {
   await Promise.all([...heldRows].map(releaseRow));
   await pool.query(`
     DROP TRIGGER IF EXISTS fail_insert ON external_jobs;
-    DROP TRIGGER IF EXISTS fail_insert ON external_quarantine;
+    DROP TRIGGER IF EXISTS fail_insert ON quarantine;
     DROP FUNCTION IF EXISTS fail_insert;
   `);
   await deleteTestStream(stream);
@@ -164,7 +164,7 @@ async function releaseRow(holder: PoolClient): Promise<void> {
   holder.release();
 }
 
-async function failInserts(table: 'external_jobs' | 'external_quarantine'): Promise<void> {
+async function failInserts(table: 'external_jobs' | 'quarantine'): Promise<void> {
   await pool.query(`
     CREATE OR REPLACE FUNCTION fail_insert() RETURNS trigger LANGUAGE plpgsql AS
       $$ BEGIN RAISE EXCEPTION 'the database refused the write'; END $$;
@@ -311,17 +311,16 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
 
     it('delivers an event that matching is blocked behind, because the groups are separate', async () => {
       await startMockApi(mock);
+      // The first event never reaches the topic, so the sequence guard stops matching.
+      await acceptEvent(pool, SELL);
       const event = await acceptEvent(pool, SELL);
-      await produceRaw(stream, [
-        { key: event.symbol, value: 'not an event' },
-        { key: event.symbol, value: JSON.stringify(event) },
-      ]);
+      await produceRaw(stream, [{ key: event.symbol, value: JSON.stringify(event) }]);
 
       const matcher = startMatching();
       startExternal();
 
       await waitForJob(event.eventId, { status: 'SUCCEEDED' });
-      await waitForCommittedMessages(2);
+      await waitForCommittedMessages(1);
       await matcher.waitForLog('partition held; restoring its book before retrying', 2);
       expect(await committedMessages(matchingGroup())).toBe(0);
       expect(await readOrder(pool, event.orderId)).toMatchObject({ status: 'QUEUED' });
@@ -509,7 +508,7 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
     });
 
     it('does not move past one until it is durably recorded', async () => {
-      await failInserts('external_quarantine');
+      await failInserts('quarantine');
       await produceRaw(stream, [{ key: 'ETH-USD', value: 'not an event' }]);
 
       const external = startExternal();
@@ -517,7 +516,7 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
       await external.waitForLog('external consumer stopped; resuming from the committed offset', 2);
       expect(await committedMessages(stream)).toBe(0);
 
-      await pool.query('DROP TRIGGER fail_insert ON external_quarantine');
+      await pool.query('DROP TRIGGER fail_insert ON quarantine');
 
       await waitForCommittedMessages(1);
       expect(await readQuarantine(pool)).toHaveLength(1);
