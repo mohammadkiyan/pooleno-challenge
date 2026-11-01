@@ -18,7 +18,9 @@ await runAsSoleOwner(
     health: config.health,
   },
   async ({ signal, reportReadiness }) => {
-    const pool = createPool(config.databaseUrl, log);
+    const pool = createPool(config.databaseUrl, log, {
+      statementTimeoutMs: config.statementTimeoutMs,
+    });
     let assigned = false;
     reportReadiness(() => Promise.resolve(assigned ? undefined : 'no partitions assigned'));
 

@@ -330,6 +330,7 @@ Compose sets its own values. Running on the host reads `.env`, copied from [.env
 | `MATCHING_GROUP_ID` | API (only to report lag), matching | Kafka consumer group | `matching-v1` |
 | `MATCHING_SESSION_TIMEOUT_MS` | Matching | Kafka session timeout, at least 6000 | `10000` |
 | `MATCHING_RESTART_DELAY_MS` | Matching | Pause before restoring after a failure | `1000` |
+| `MATCHING_STATEMENT_TIMEOUT_MS` | Matching | Longest one database statement may run, at least 1. An order whose fills take longer blocks matching until this is raised | `60000` |
 | `EXTERNAL_GROUP_ID` | API (only to report lag), external | Kafka consumer group | `external-notification-v1` |
 | `EXTERNAL_SESSION_TIMEOUT_MS` | External | Kafka session timeout, at least 6000 | `10000` |
 | `EXTERNAL_RESTART_DELAY_MS` | External | Pause after a failed session or delivery pass | `1000` |

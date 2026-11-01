@@ -98,11 +98,25 @@ describe('loadMatchingConfig', () => {
       groupId: 'matching-v1',
       sessionTimeoutMs: 10_000,
       restartDelayMs: 1_000,
+      statementTimeoutMs: 60_000,
     });
   });
 
   it('requires DATABASE_URL', () => {
     expect(() => loadMatchingConfig({})).toThrow('DATABASE_URL is required');
+  });
+
+  it('reads the statement timeout', () => {
+    const config = loadMatchingConfig({ DATABASE_URL, MATCHING_STATEMENT_TIMEOUT_MS: '120000' });
+
+    expect(config.statementTimeoutMs).toBe(120_000);
+  });
+
+  // In PostgreSQL a statement_timeout of 0 means no limit.
+  it.each(['0', '1.5'])('rejects a statement timeout of %s', (value) => {
+    expect(() => loadMatchingConfig({ DATABASE_URL, MATCHING_STATEMENT_TIMEOUT_MS: value })).toThrow(
+      'MATCHING_STATEMENT_TIMEOUT_MS',
+    );
   });
 
   it('rejects a session timeout that the broker would refuse', () => {

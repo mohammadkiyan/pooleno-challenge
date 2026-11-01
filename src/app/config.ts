@@ -37,6 +37,7 @@ export interface MatchingConfig {
   groupId: string;
   sessionTimeoutMs: number;
   restartDelayMs: number;
+  statementTimeoutMs: number;
 }
 
 export interface NotificationRetryPolicy {
@@ -109,6 +110,13 @@ export function loadMatchingConfig(env: NodeJS.ProcessEnv = process.env): Matchi
       min: 6_000,
     }),
     restartDelayMs: readInteger(env, 'MATCHING_RESTART_DELAY_MS', { fallback: 1_000, min: 1 }),
+    // All of one order's fills go in a single update and a single insert, so this limits how
+    // many makers it can fill. An order over the limit blocks matching. PostgreSQL treats 0
+    // as no limit, so the minimum is 1.
+    statementTimeoutMs: readInteger(env, 'MATCHING_STATEMENT_TIMEOUT_MS', {
+      fallback: 60_000,
+      min: 1,
+    }),
   };
 }
 

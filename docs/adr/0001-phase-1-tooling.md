@@ -72,7 +72,7 @@ Every request uses the fixed scope `demo`. It is a server constant and is never 
 | Budget | Value | Purpose |
 |---|---|---|
 | `lock_timeout` in acceptance | 1 s, set by `ACCEPTANCE_LOCK_TIMEOUT_MS` | Bounds the wait on a key or symbol counter |
-| `statement_timeout` | 5 s | Bounds any single statement |
+| `statement_timeout` | 5 s (matching: 60 s, set by `MATCHING_STATEMENT_TIMEOUT_MS`) | Bounds any single statement. Matching writes all of one order's fills in a single update and a single insert, so it gets a higher limit |
 | `idle_in_transaction_session_timeout` | 10 s | Frees locks held by a stalled client |
 | Connection timeout | 2 s | Fails fast when the pool or database is unavailable |
 | Pool size | 10 | Keeps the number of concurrent transactions small |
