@@ -53,7 +53,7 @@ The database work grows with K too. One matching transaction writes the taker, K
 
 ## Kafka: publishing, offsets and guarantees
 
-**Publishing.** Acceptance writes the event to the Outbox, and one publisher sends it, keyed by symbol, through an idempotent producer. Each pass sends only the earliest unpublished event of each symbol, so a failed event holds back its own symbol and no other. `published_at` is set after Kafka acknowledges.
+**Publishing.** Acceptance writes the event to the Outbox, and one publisher sends it, keyed by symbol, through an idempotent producer with `acks=all`, so an acknowledged event is on every in-sync replica. Each pass sends only the earliest unpublished event of each symbol, so a failed event holds back its own symbol and no other. `published_at` is set after Kafka acknowledges.
 
 **Offsets.** Each consumer group keeps its own position, so matching being blocked doesn't stop notifications, and the reverse. Auto-commit is off. A consumer commits `offset + 1` for each message, only after that message's work is durable, so a message can be handled twice but never skipped.
 
@@ -65,13 +65,17 @@ The database work grows with K too. One matching transaction writes the taker, K
 | Layer | Mechanism | What it prevents |
 |---|---|---|
 | Client to API | `Idempotency-Key`, plus a fingerprint of the request's meaning | A second order from a retry |
-| Publisher to Kafka | Idempotent producer, and the same stored payload on any resend | A duplicate from a client retry, or a different event for one order |
+| Publisher to Kafka | Idempotent producer, and the same stored payload on any resend | A duplicate from the producer's own retries within one session, or a different event for one order. A resend after a publisher restart is a real duplicate in the topic, and the Inbox rows below absorb it |
 | Kafka to matching | Inbox row per consumer and event, in the matching transaction | A second trade |
 | Old or unknown events | Progress row lock, `acceptanceSequence = last_applied_seq + 1`, a check that the book matches the database, and compare-and-set on orders | A stale or out-of-order event changing state |
 | Kafka to external | Inbox row and unique job per event | A second job |
 | Worker to destination | Stable key `external-notify:<eventId>`, and the same bytes on every attempt | A second effect, for as long as the destination remembers the key |
 
 The local Inbox can't close the gap between a remote success and its local record. Only the destination's own idempotency closes it, and a test loses the response after the remote commit to prove that.
+
+**Why not Kafka transactions.** A transactional producer with `read_committed` consumers gives exactly once only for work that reads from Kafka and writes back to Kafka. Here every effect lands in PostgreSQL or at an HTTP destination, which a Kafka transaction can't include, so it would add a coordinator and fencing without removing any of the duplicates above. Idempotent effects are what make redelivery safe.
+
+**Calling the external API.** The external consumer doesn't call the destination itself. It commits an Inbox row and a job, then commits its offset, and a worker delivers due jobs. A call inside the consumer would hold its partition for the length of a destination outage, and a retry schedule kept in memory would be lost on a restart. As jobs, retries and due times survive a crash, and an outage delays only notifications.
 
 **Failures and retries.**
 
@@ -103,6 +107,8 @@ The book changes only after the matching commit, and the offset only after the b
 
 ## Scaling consumers and preserving ordering
 
+**Order is needed only where state depends on it.** Matching needs strict order within a symbol, because each order changes the book the next one meets, so it scales by partition. Notifications need no order, so they can scale with competing workers. The API and the publisher need only the per-symbol sequence, which acceptance already assigns.
+
 **Order within a symbol is the invariant.** Acceptance assigns each symbol a gap-free sequence under a row lock. The publisher sends only the earliest unpublished event of each symbol. The Kafka key is the symbol, so all of its events share a partition. Matching rejects any event that isn't next in sequence.
 
 **Partitions bound consumer scale.** A partition has at most one active consumer in a group, so the topic's 3 partitions allow at most 3 useful consumers per group. One symbol is never processed in parallel, however many consumers run. Adding partitions later would move symbols between them and break their order across the change, so the count is fixed, and a real deployment should start with more.
@@ -116,11 +122,17 @@ The book changes only after the matching commit, and the offset only after the b
 
 A consumer group alone can't prove ownership, because a member that has lost its partition can still be writing to PostgreSQL while its successor starts. So each single-owner role holds a PostgreSQL session advisory lock, and a standby waits for it. Today's checks limit the damage of a brief overlap, but they aren't fencing. Two active matchers would keep failing each other rather than share work. A faster single symbol would need a faster matcher, not more of them.
 
+Running several matchers would raise three more problems:
+
+- **Changing the partition count.** Rather than add partitions in place, create a new topic with more partitions and move symbols to it one at a time. The sequence guard makes this safe: the new topic's consumer won't apply sequence *n + 1* until *n* has been applied from the old topic.
+- **Hot symbols.** One busy symbol is limited to one partition and one lane, which is inherent to a single order book. The symbols hashed to the same partition don't have to share that limit. An explicit symbol-to-partition map, in place of the hash, can give each hot symbol its own partition. The partitioner is already pinned so that this mapping never moves by accident.
+- **Rebalances.** Today any membership change ends the session, and matching rebuilds every book. With several matchers, every deploy would pause them all. Cooperative rebalancing would revoke only the partitions that move, and static membership (`group.instance.id`) would let a rolling restart skip the rebalance. Each matcher would then restore only the books of the partitions it gained. Consumer lag, already in `GET /ops/backlog`, is the signal to scale on, capped at the partition count, because extra consumers sit idle.
+
 In one local run on a 12-core machine, the API accepted about 460 orders per second, the publisher sent about 230 events per second, matching kept up at about 215 orders per second that didn't trade, and the worker delivered about 135 jobs per second. These are floors on one machine, not capacity claims.
 
 ## Kubernetes: shutdown and health
 
-This project has no manifests. It is built to run under Kubernetes as follows.
+This project has no manifests. It is built to run under Kubernetes as follows. Reliability comes from the earlier sections: the Outbox, idempotent effects, durable retries and a restore from the database. Kubernetes only has to stop, restart and route each role safely.
 
 **Graceful shutdown.** On `SIGTERM` or `SIGINT`, a role reports not ready, stops taking new work, finishes what is in flight, commits offsets only for completed work, leaves its group, releases its lock and exits with status 0. `SHUTDOWN_TIMEOUT_MS`, 8 s by default, bounds all of this. Past the deadline it exits with status 1, and a second signal ends it at once. Both are safe, because a forced exit is the same as a crash and durable records drive replay. Measured with `docker compose stop`: 0.3 s with status 0 with healthy dependencies, and 8.3 s with status 1 for a consumer whose broker hung. A worker role that stops with no signal, because it failed or lost ownership, is bounded by the same deadline.
 
@@ -137,6 +149,7 @@ This project has no manifests. It is built to run under Kubernetes as follows.
 
 - Set `terminationGracePeriodSeconds` above `SHUTDOWN_TIMEOUT_MS`, and add a short `preStop` delay on the API so endpoints update before it stops listening.
 - Map probes to `/health/live` and `/health/ready`, and set `HOST` and `HEALTH_HOST` to `0.0.0.0`.
+- Give matching a `startupProbe`, or a liveness `failureThreshold × periodSeconds` well above the restore time. Rebuilding the books blocks the event loop, about 6 s for 5M orders, so liveness can't answer during it, and a tight probe would restart the role in a loop.
 - Run the API as a Deployment with several replicas. Run one replica each of the publisher, matching and external, and let Kubernetes restart them. They have no client traffic, so they need no Service. A standby is correctly not ready, so a two-replica Deployment reports one unavailable replica forever.
 - Run `migrate` and `kafka-init` as Jobs before the roles start.
 - An ingress must not route `/health/*` or `/ops/*`, because they have no authentication.
