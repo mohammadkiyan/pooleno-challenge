@@ -1,23 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
-import Fastify, { LogController } from 'fastify';
-import type { Pool } from 'pg';
-import type { Logger } from 'pino';
-import type { KafkaLag } from '../modules/operations/kafka-lag.js';
-import { operationsRoutes } from '../modules/operations/operations.routes.js';
-import { orderRoutes } from '../modules/orders/order.routes.js';
-import { ApiError } from './api-error.js';
+import { NestFactory } from '@nestjs/core';
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { LogController, type LogLevel } from 'fastify';
+import { ApiModule, type ApiOptions } from './api.module.js';
+import { NestLogger } from './nest-logger.js';
 
-export interface ApiDependencies {
-  pool: Pool;
-  log: Logger;
-  lockTimeoutMs: number;
-  readKafkaLag: () => Promise<KafkaLag>;
-}
-
-export function buildApi({ pool, log, lockTimeoutMs, readKafkaLag }: ApiDependencies) {
-  const app = Fastify({
-    loggerInstance: log,
+export async function buildApi(options: ApiOptions): Promise<NestFastifyApplication> {
+  const adapter = new FastifyAdapter({
+    loggerInstance: options.log,
     genReqId: () => randomUUID(),
     logController: new LogController({ requestIdLogLabel: 'requestId' }),
     bodyLimit: 16 * 1024,
@@ -29,55 +19,34 @@ export function buildApi({ pool, log, lockTimeoutMs, readKafkaLag }: ApiDependen
         removeAdditional: false,
       },
     },
-  }).withTypeProvider<TypeBoxTypeProvider>();
-
-  app.setErrorHandler((error, request, reply) => {
-    const apiError = toApiError(error);
-
-    if (apiError.statusCode >= 500) {
-      request.log.error({ err: error }, 'request failed');
-    }
-    if (apiError.retryAfterSeconds !== undefined) {
-      void reply.header('retry-after', apiError.retryAfterSeconds);
-    }
-
-    return reply.code(apiError.statusCode).send({ code: apiError.code, message: apiError.message });
+    // No Nest middleware is used, so none of its plumbing should see a request.
+    skipMiddie: true,
+    // Fastify answers a malformed URL or an over-long parameter itself. Nest's default would
+    // route them through the exception filter, which changes the headers and logs an error.
+    // The types don't allow undefined, but the adapter's default has to be overwritten.
+    frameworkErrors: undefined as never,
   });
 
-  app.setNotFoundHandler((request, reply) =>
-    reply.code(404).send({ code: 'NOT_FOUND', message: `No route for ${request.method} ${request.url}` }),
+  // Nest forwards a route's `config` but has no decorator for Fastify's route `logLevel`.
+  adapter.getInstance().addHook('onRoute', (route) => {
+    const { logLevel } = (route.config ?? {}) as { logLevel?: LogLevel };
+    if (logLevel) {
+      route.logLevel = logLevel;
+    }
+  });
+
+  const app = await NestFactory.create<NestFastifyApplication>(
+    ApiModule.forRoot(options),
+    adapter,
+    {
+      // Nest would add a parser for form bodies, which this API answers with 415.
+      bodyParser: false,
+      // Let a failed start reject, rather than Nest ending the process itself.
+      abortOnError: false,
+      logger: new NestLogger(options.log),
+    },
   );
-
-  void app.register(orderRoutes, { pool, lockTimeoutMs });
-  void app.register(operationsRoutes, { pool, readKafkaLag });
-
+  await app.init();
+  await adapter.getInstance().ready();
   return app;
-}
-
-function toApiError(error: unknown): ApiError {
-  if (error instanceof ApiError) {
-    return error;
-  }
-  if (isFastifyClientError(error)) {
-    return new ApiError(error.statusCode, 'INVALID_REQUEST', error.message);
-  }
-
-  // After validation the only work left is PostgreSQL I/O, and the commit may or may
-  // not have happened. Retrying with the same Idempotency-Key is safe in either case.
-  return new ApiError(
-    503,
-    'SERVICE_UNAVAILABLE',
-    'The outcome could not be confirmed. Retry with the same Idempotency-Key.',
-    1,
-  );
-}
-
-function isFastifyClientError(error: unknown): error is Error & { statusCode: number } {
-  return (
-    error instanceof Error &&
-    'statusCode' in error &&
-    typeof error.statusCode === 'number' &&
-    error.statusCode >= 400 &&
-    error.statusCode < 500
-  );
 }

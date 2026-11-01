@@ -36,6 +36,19 @@ export function closeOnSignal(
   process.on('SIGTERM', shutdown);
 }
 
+/**
+ * For a Nest shutdown hook. Nest logs what a hook rejects with and carries on, so `app.close()`
+ * still resolves. The exit code is the only way left for the failure to reach the supervisor.
+ */
+export async function closeOrFail(log: Logger, close: () => Promise<void>): Promise<void> {
+  try {
+    await close();
+  } catch (error) {
+    log.error({ err: error }, 'shutdown failed');
+    process.exitCode = 1;
+  }
+}
+
 /** The same contract for a role that drains a loop: the signal aborts on SIGINT or SIGTERM. */
 export function shutdownSignal(options: ShutdownOptions): AbortSignal {
   const shutdown = new AbortController();

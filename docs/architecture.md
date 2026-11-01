@@ -22,13 +22,13 @@ client ── POST ──▶ API ── one transaction ──▶ PostgreSQL
                          progress, Inbox
 ```
 
-One codebase has separate modules and a separate entrypoint for each of the four roles. PostgreSQL is the source of truth, Kafka carries work between roles, and the in-memory book is a cache of committed rows. Any role can be killed at any moment, because each one resumes from durable records.
+One codebase has separate modules and a separate entrypoint for each of the four roles. NestJS wires each process, as [ADR 0005](adr/0005-nestjs-on-fastify.md) explains: an HTTP application on Fastify for the API, and an application context for each worker. PostgreSQL is the source of truth, Kafka carries work between roles, and the in-memory book is a cache of committed rows. Any role can be killed at any moment, because each one resumes from durable records.
 
 `202 Accepted` means the order, its idempotency receipt, its symbol sequence and its Outbox event are committed together. It doesn't mean the order has matched, and clients poll `GET /v1/orders/{orderId}` for that. Validation happens before the commit, so an accepted order is never rejected later, and infrastructure failure can only delay it. The assignment doesn't require asynchronous matching or `202`. They are what lets a crash at any point lose nothing a client was told about.
 
 ## Matching: data structures and complexity
 
-Makers trade best price first, oldest first within a price, at the maker's price, and either side can partly execute. The engine is pure code with no dependency on Fastify, PostgreSQL or Kafka.
+Makers trade best price first, oldest first within a price, at the maker's price, and either side can partly execute. The engine is pure code with no dependency on NestJS, Fastify, PostgreSQL or Kafka.
 
 | Structure | Implementation | Why |
 |---|---|---|

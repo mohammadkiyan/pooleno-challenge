@@ -13,7 +13,7 @@ Every need here is met by the runtime and what is already installed: `fetch` for
 
 ## Decision: one process for intake and delivery
 
-[external.ts](../../src/entrypoints/external.ts) runs the consumer and the worker side by side. Neither loop rejects, because each resumes from durable state until shutdown, so Kafka being down stops no delivery and the destination being down stops no intake.
+[external.role.ts](../../src/modules/external/external.role.ts) runs the consumer and the worker side by side. Neither loop rejects, because each resumes from durable state until shutdown, so Kafka being down stops no delivery and the destination being down stops no intake.
 
 The role holds its own PostgreSQL session advisory lock, exactly as the publisher and matcher do ([ADR 0002](0002-messaging-and-matching.md#decision-single-ownership)). A standby does nothing until it has the lock. The worker checks the lock's connection before each pass.
 

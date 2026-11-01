@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { Pool, PoolClient } from 'pg';
 import { pino } from 'pino';
 import { Value } from 'typebox/value';
@@ -27,11 +28,11 @@ const NO_ROWS = { orders: 0, receipts: 0, events: 0 };
 const NO_KAFKA = () => Promise.resolve({ available: false as const });
 
 let pool: Pool;
-let app: ReturnType<typeof buildApi>;
+let app: NestFastifyApplication;
 
-beforeAll(() => {
+beforeAll(async () => {
   pool = createPool(TEST_DATABASE_URL, log);
-  app = buildApi({ pool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
+  app = await buildApi({ databaseUrl: TEST_DATABASE_URL, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
 });
 
 afterAll(async () => {
@@ -263,10 +264,15 @@ describe('concurrency', () => {
   });
 
   describe('with a short lock budget', () => {
-    let impatientApp: ReturnType<typeof buildApi>;
+    let impatientApp: NestFastifyApplication;
 
-    beforeAll(() => {
-      impatientApp = buildApi({ pool, log, lockTimeoutMs: SHORT_LOCK_TIMEOUT_MS, readKafkaLag: NO_KAFKA });
+    beforeAll(async () => {
+      impatientApp = await buildApi({
+        databaseUrl: TEST_DATABASE_URL,
+        log,
+        lockTimeoutMs: SHORT_LOCK_TIMEOUT_MS,
+        readKafkaLag: NO_KAFKA,
+      });
     });
 
     afterAll(() => impatientApp.close());
@@ -420,9 +426,14 @@ describe('request validation', () => {
   });
 
   it('rejects a repeated Idempotency-Key header sent over a real socket', async () => {
-    const server = buildApi({ pool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
+    const server = await buildApi({
+      databaseUrl: TEST_DATABASE_URL,
+      log,
+      lockTimeoutMs: 1_000,
+      readKafkaLag: NO_KAFKA,
+    });
     await server.listen({ host: '127.0.0.1', port: 0 });
-    const { port } = server.server.address() as AddressInfo;
+    const { port } = server.getHttpServer().address() as AddressInfo;
 
     const statusCode = await new Promise<number | undefined>((resolve, reject) => {
       const outgoing = httpRequest(
@@ -560,18 +571,18 @@ describe('GET /v1/orders/:orderId', () => {
 });
 
 describe('when PostgreSQL is unreachable', () => {
-  let unreachablePool: Pool;
-  let unreachableApp: ReturnType<typeof buildApi>;
+  let unreachableApp: NestFastifyApplication;
 
-  beforeAll(() => {
-    unreachablePool = createPool('postgres://pooleno@127.0.0.1:1/none', log);
-    unreachableApp = buildApi({ pool: unreachablePool, log, lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
+  beforeAll(async () => {
+    unreachableApp = await buildApi({
+      databaseUrl: 'postgres://pooleno@127.0.0.1:1/none',
+      log,
+      lockTimeoutMs: 1_000,
+      readKafkaLag: NO_KAFKA,
+    });
   });
 
-  afterAll(async () => {
-    await unreachableApp.close();
-    await unreachablePool.end();
-  });
+  afterAll(() => unreachableApp.close());
 
   it('never claims acceptance, and asks for a retry with the same key', async () => {
     const response = await unreachableApp.inject(postOrderRequest(uniqueKey()));
@@ -590,6 +601,31 @@ describe('when PostgreSQL is unreachable', () => {
     });
 
     expect(response.statusCode).toBe(503);
+  });
+});
+
+describe('what Nest would otherwise add', () => {
+  it('answers a form body with 415, because no form parser is registered', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/orders',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'idempotency-key': uniqueKey(),
+      },
+      payload: 'symbol=BTC-USD',
+    });
+
+    expect(response.statusCode).toBe(415);
+    expect(response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
+  it('leaves a malformed URL to Fastify', async () => {
+    const response = await app.inject({ method: 'GET', url: '/v1/orders/%FF' });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers['content-type']).toBe('application/json');
+    expect(response.json()).toMatchObject({ code: 'FST_ERR_BAD_URL' });
   });
 });
 

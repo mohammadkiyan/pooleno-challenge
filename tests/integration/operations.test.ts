@@ -339,9 +339,9 @@ describe('Kafka lag', () => {
 });
 
 describe('the operational routes of the API', () => {
-  const server = (dependencies: { pool: Pool; kafkaBrokers: string[] }) =>
+  const server = (dependencies: { databaseUrl: string; kafkaBrokers: string[] }) =>
     buildApi({
-      pool: dependencies.pool,
+      databaseUrl: dependencies.databaseUrl,
       log,
       lockTimeoutMs: 1_000,
       readKafkaLag: () =>
@@ -353,7 +353,7 @@ describe('the operational routes of the API', () => {
     });
 
   it('keeps reporting the backlog while Kafka is down', async () => {
-    const app = server({ pool, kafkaBrokers: [CLOSED_PORT] });
+    const app = await server({ databaseUrl: TEST_DATABASE_URL, kafkaBrokers: [CLOSED_PORT] });
     await accept();
 
     const response = await app.inject({ method: 'GET', url: '/ops/backlog' });
@@ -368,7 +368,7 @@ describe('the operational routes of the API', () => {
   });
 
   it('reports ready without Kafka, because acceptance does not need it', async () => {
-    const app = server({ pool, kafkaBrokers: [CLOSED_PORT] });
+    const app = await server({ databaseUrl: TEST_DATABASE_URL, kafkaBrokers: [CLOSED_PORT] });
 
     const live = await app.inject({ method: 'GET', url: '/health/live' });
     const ready = await app.inject({ method: 'GET', url: '/health/ready' });
@@ -379,8 +379,10 @@ describe('the operational routes of the API', () => {
   });
 
   it('stays alive but not ready without PostgreSQL, and names no connection details', async () => {
-    const unreachable = createPool('postgres://pooleno:secret@127.0.0.1:1/none', log);
-    const app = server({ pool: unreachable, kafkaBrokers: [CLOSED_PORT] });
+    const app = await server({
+      databaseUrl: 'postgres://pooleno:secret@127.0.0.1:1/none',
+      kafkaBrokers: [CLOSED_PORT],
+    });
 
     const live = await app.inject({ method: 'GET', url: '/health/live' });
     const ready = await app.inject({ method: 'GET', url: '/health/ready' });
@@ -390,6 +392,5 @@ describe('the operational routes of the API', () => {
     expect(ready.json()).toEqual({ status: 'not_ready', reason: 'database unavailable' });
 
     await app.close();
-    await unreachable.end();
   });
 });

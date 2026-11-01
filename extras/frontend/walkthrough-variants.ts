@@ -258,7 +258,7 @@ function invalid(precision: boolean): Frame[] {
     "Validation fails before acceptOrder runs. No idempotency receipt, order, sequence advance, or Outbox event is committed.",
     ["api", "client"],
     "Return 400 with a field-specific error. Do not claim acceptance.",
-    api + "order.routes.ts → canonicalizeOrder",
+    api + "orders.controller.ts → canonicalizeOrder",
     {
       phase: "api-reply",
       transfers: [["api", "client"]],
@@ -321,7 +321,7 @@ next(
   "Each request receives the same saved 202 receipt. Exactly one order and acceptance event were created in this illustrated run.",
   ["api", "client"],
   "Concurrency does not multiply the order intention.",
-  api + "order.routes.ts",
+  api + "orders.controller.ts",
   {
     phase: "api-reply",
     transfers: [["api", "client"]],

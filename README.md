@@ -89,7 +89,7 @@ The walkthrough leaves sell orders resting at 100 on `ETH-USD`, so this one trad
 - [API](docs/api.md): endpoints, statuses, errors and markets.
 - [Operations](docs/operations.md): failure walkthroughs, health, backlog, repairs, running on the host and configuration.
 - [Testing](docs/testing.md): how to run the tests, the results, and every injected failure with what it proves.
-- [ADRs](docs/adr): the reasoning and evidence behind [tooling and budgets](docs/adr/0001-tooling-and-budgets.md), [messaging and matching](docs/adr/0002-messaging-and-matching.md), [external notifications](docs/adr/0003-external-notifications.md), and [shutdown, health and visibility](docs/adr/0004-shutdown-health-and-visibility.md).
+- [ADRs](docs/adr): the reasoning and evidence behind [tooling and budgets](docs/adr/0001-tooling-and-budgets.md), [messaging and matching](docs/adr/0002-messaging-and-matching.md), [external notifications](docs/adr/0003-external-notifications.md), [shutdown, health and visibility](docs/adr/0004-shutdown-health-and-visibility.md), and [NestJS on Fastify](docs/adr/0005-nestjs-on-fastify.md).
 
 [extras/](extras) holds an optional illustrated scenario viewer. Nothing here depends on it, and you can review the project without it.
 
@@ -111,13 +111,14 @@ npm run check
 src/
   entrypoints/        Process entrypoints: api, publisher, matching, external, redrive-external,
                       migrate, init-kafka
-  app/                API assembly, configuration, errors, signals, health server, single ownership
-  infrastructure/     Pool, transactions, session lock, logger, migration runner
-  modules/orders/     Routes, acceptance, idempotency, decimals, markets
-  modules/messaging/  Event schema, Outbox, publisher, Kafka clients, Inbox, consumer
-  modules/matching/   Pure engine and book, plus the transaction and restore around them
-  modules/external/   Job handoff, worker, HTTP client and job storage
-  modules/operations/ Health routes, backlog report and Kafka lag
+  app/                Nest API assembly, role runner, configuration, errors, signals, health server,
+                      single ownership
+  infrastructure/     Pool module, transactions, session lock, logger, migration runner
+  modules/orders/     Controller, acceptance, idempotency, decimals, markets
+  modules/messaging/  Publisher role, event schema, Outbox, Kafka clients, Inbox, consumer
+  modules/matching/   Matching role, pure engine and book, the transaction and restore around them
+  modules/external/   External role, job handoff, worker, HTTP client and job storage
+  modules/operations/ Controller for health and backlog, backlog report and Kafka lag
 mock-api/             Stand-in destination with durable idempotency, sharing nothing with src/
 migrations/           SQL files, applied in name order
 scripts/              The walkthrough and the crash proof that ./review.sh runs

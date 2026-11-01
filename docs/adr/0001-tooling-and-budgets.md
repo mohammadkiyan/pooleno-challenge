@@ -12,7 +12,7 @@ The repository started empty, so there were no existing conventions to reuse. Th
 - demo identity scope
 - retry and time budgets
 
-This ADR settles them. [ADR 0002](0002-messaging-and-matching.md) settles the Kafka client and the balanced tree.
+This ADR settles them. [ADR 0002](0002-messaging-and-matching.md) settles the Kafka client and the balanced tree. [ADR 0005](0005-nestjs-on-fastify.md) later put NestJS on top of Fastify, which changed the rows marked below.
 
 ## Decision: versions
 
@@ -22,11 +22,10 @@ Versions are exact in `package.json`, locked in `package-lock.json`, and pinned 
 |---|---|---|---|
 | Node.js | `26.13.0-alpine3.24` | 2026-10-28, LTS | Current LTS line |
 | PostgreSQL | `18.6-alpine3.24` | On Docker Hub | Newest stable major; 19 is still `19rc1` |
-| `fastify` | 5.12.7 | 2026-10-13 | Web framework |
+| `fastify` | 5.12.7 | 2026-10-13 | HTTP server under Nest, and the mock API's server (changed by ADR 0005) |
 | `typebox` | 1.4.3 | 2026-10-22 | Request and response schemas |
-| `@fastify/type-provider-typebox` | 6.3.0 | 2026-10-12 | Types routes from TypeBox schemas |
 | `pg` | 8.23.1 | 2026-09-30 | Direct SQL, with no ORM |
-| `pino` | 10.4.0 | 2026-10-02 | Fastify's own logger |
+| `pino` | 10.4.0 | 2026-10-02 | Fastify's own logger, and Nest's through an adapter (changed by ADR 0005) |
 | `typescript` | 6.0.3 | see below | Newest version the linter supports |
 | `typescript-eslint` | 8.72.1 | 2026-10-29 | Type-aware strict rules |
 | `eslint` | 10.14.0 | 2026-10-30 | Lint command |
@@ -39,7 +38,7 @@ Versions are exact in `package.json`, locked in `package-lock.json`, and pinned 
 
 - **TypeScript:** 7.0.2 is the newest release, but `typescript-eslint` 8.72.1 declares the peer range `>=4.8.4 <6.1.0`. Type-aware linting takes priority, so the project uses 6.0.3.
 - **Fastify and pino:** Fastify 5.12.7 requires `^9.14.0 || ^10.1.0`. 10.4.0 satisfies it.
-- **Type provider and TypeBox:** the provider's peer range `^1.1.14` includes 1.4.3. Only its types are used. Validation runs in Fastify's own Ajv.
+- **TypeBox:** handlers use its `Static` types directly, since ADR 0005 removed the type provider. Validation runs in Fastify's own Ajv.
 - **Vitest and Node.js:** Vitest 5 supports Node.js `>=26`. The test suite ran on Node.js 26.7.0 on the host, and the API ran on 26.13.0 in its image.
 - **PostgreSQL 18:** the official image keeps data under `/var/lib/postgresql`, so the named volume mounts there. Data surviving `SIGKILL` and a restart confirms the path.
 - **Production audit:** `npm audit --omit=dev` reported 0 vulnerabilities when the dependencies were installed.

@@ -16,6 +16,8 @@ export default defineConfig(
     rules: {
       // Numbers read naturally in messages; bigint and sequence values are strings at JSON boundaries.
       '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
+      // A Nest module is a class that may hold nothing but its decorator and a factory.
+      '@typescript-eslint/no-extraneous-class': ['error', { allowWithDecorator: true }],
     },
   },
   {

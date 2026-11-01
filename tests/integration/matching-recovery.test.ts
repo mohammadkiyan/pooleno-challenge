@@ -161,7 +161,12 @@ describe('applying accepted orders', () => {
 
   it('exposes the trades of both sides through GET, in execution order', async () => {
     const { s2, b1 } = await runFixture();
-    const app = buildApi({ pool, log: pino({ level: 'silent' }), lockTimeoutMs: 1_000, readKafkaLag: NO_KAFKA });
+    const app = await buildApi({
+      databaseUrl: TEST_DATABASE_URL,
+      log: pino({ level: 'silent' }),
+      lockTimeoutMs: 1_000,
+      readKafkaLag: NO_KAFKA,
+    });
 
     const taker = (await app.inject({ url: `/v1/orders/${b1.orderId}` })).json<OrderResponse>();
     const maker = (await app.inject({ url: `/v1/orders/${s2.orderId}` })).json<OrderResponse>();

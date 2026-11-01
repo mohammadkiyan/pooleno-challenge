@@ -151,7 +151,7 @@ export function accept(
       response: "Not accepted yet.",
       requestLabel: `R1 · ${orderId} · ${side} ${quantity} @ ${price}`,
       decision: "A new order intention gets its own idempotency key.",
-      source: api + "order.routes.ts → POST /v1/orders",
+      source: api + "orders.controller.ts → POST /v1/orders",
       phase: null,
       transfers: [],
     },
@@ -193,7 +193,7 @@ export function accept(
     "The saved receipt returns to the caller. This confirms durable acceptance, not matching or notification. Async publication can start any time after commit; this is one illustrative interleaving.",
     ["api", "client"],
     "Return the receipt after commit; Kafka availability is not required.",
-    api + "order.routes.ts → reply.code(status)",
+    api + "orders.controller.ts → reply.code(status)",
     { phase: "api-reply", transfers: [["api", "client"]], response: receipt },
   );
   return frames;
@@ -410,7 +410,7 @@ function retry(conflict: boolean) {
       : "R2 resends the same key with equivalent decimal spelling. This is a new HTTP request for the same order intention.",
     ["client"],
     "Retry must re-enter through validation; no silent updates to accepted orders.",
-    api + "order.routes.ts",
+    api + "orders.controller.ts",
     {
       requestLabel: conflict ? "R2 · changed order" : "R2 · retry same order",
       request: frames[0]!.request.replace(
