@@ -1,23 +1,46 @@
-# Scenario viewer
+# Live scenario viewer
 
-`./review.sh` from the repository root builds this viewer in Docker, serves it at [127.0.0.1:8084](http://127.0.0.1:8084) and opens it in your browser, so reviewers need nothing else. The steps under [Run](#run) are for working on the viewer itself.
-
-## Scenario viewer
-
-An independent React, TypeScript, Vite, and Motion frontend with six one-click animated walkthroughs:
-
-- Price priority, FIFO, and partial fills.
-- Non-crossing limit orders.
-- Identical requests under one idempotency key.
-- A changed request under an existing key.
-- A notification applied by the destination whose response is lost.
-- Durable acceptance while Kafka is unavailable, followed by recovery.
-
-**This is an illustrated frontend preview.** The scenarios use authored example frames, not captured backend traffic. Running them sends no order requests, changes no database, and controls no containers. The interface labels its examples and expected outcomes accordingly. Live scenario orchestration is a separate future step.
-
-## Run
+The viewer executes the actual backend. **Run scenario** sends HTTP requests to the compiled Order API and observes the real PostgreSQL, Outbox publisher, Kafka consumers, matching engine and notification worker. There are no authored result frames or fallback success responses.
 
 From the repository root:
+
+```bash
+docker compose up -d --build --wait postgres kafka viewer
+```
+
+Open [the viewer](http://127.0.0.1:8084). `./review.sh` also builds and opens it after its terminal checks. If another project uses the default ports, set `HOST_PORT_POSTGRES`, `HOST_PORT_KAFKA` and `HOST_PORT_VIEWER` to free ports.
+
+## What runs
+
+Each run gets a generated PostgreSQL database, Kafka topic, consumer groups and destination SQLite file. Separate Node processes execute the same compiled API, publisher, matching and external entry points used by the application. Migrations and topic initialization use the existing entry points too. The runner orchestrates requests and checks results; it contains no matching, idempotency or delivery implementation.
+
+The six primary scenarios and nine additional cases exercise:
+
+- Price priority, FIFO, partial execution, SELL takers, and a partially filled taker resting at its limit.
+- Non-crossing orders that remain open.
+- Equivalent request retries, including 25 actual concurrent requests.
+- Conflicting keys and invalid price/quantity requests with no acceptance writes.
+- A destination that applies an effect and loses its response; a transient 503 with Retry-After; permanent 400 followed by the real redrive CLI; and retry-budget exhaustion.
+- Kafka connection interruption, durable acceptance and Outbox recovery.
+- A matching process killed with SIGKILL, restarted, then given the original persisted event through Kafka. The runner waits for the duplicate record's committed offset and verifies unchanged trades and quantities. This is a crash after an observed commit, not injection into the exact commit/offset window.
+
+The exhaustion case explicitly sets `EXTERNAL_MAX_ATTEMPTS=2`. Other cases retain the application's 400-attempt default. Retry timing is shortened in the sandbox and jitter is disabled so the run is inspectable.
+
+The external destination remains the challenge's existing **mock API**. It receives real HTTP notifications and stores real idempotent effects in its own SQLite database. Its fault controls drive actual worker retries; the frontend never fabricates their outcome.
+
+## Evidence and controls
+
+The flow, book, executions and counters update from backend observations. Both diagram views use those observations. Internal boxes explain the implementation; they do not claim to be per-function traces. The runner captures API responses, PostgreSQL rows, destination effects, process logs, and each assertion's actual/expected values. Captures across services are taken at nearby times, not in one distributed transaction. A run is verified only after its checks and cleanup finish. Errors remain visible with the evidence captured before failure.
+
+The small playback controls review captured observations. They do not pause the backend. **Run again** performs a fresh execution. Reloading the page reconnects to the latest run. One run executes at a time; other requests get 409. The latest ten run captures are retained in memory until the viewer restarts; each has a **Full run JSON** link.
+
+Finally, the runner stops its child processes, removes only its generated database/topic and deletes its temporary destination file. Existing application orders, topics and destination effects are untouched. A failed cleanup is shown as a failed run. Abruptly killing the viewer itself can leave generated `viewer_*` databases or `viewer.orders.*` topics; graceful Compose shutdown runs cleanup.
+
+Kafka uses a separate `VIEWER` listener advertising the viewer's TCP forwarding address. The outage scenario destroys this link's sockets and rejects new connections, then reconnects them. The broker and the application's normal INTERNAL/HOST listeners keep running. No Docker socket or host filesystem is mounted into the viewer. The runner is a local development tool, bound to loopback through Compose; it rejects cross-origin controls and accepts only fixed scenario/case IDs.
+
+## Develop and verify
+
+Install the root and extras dependencies. With the Docker viewer running, Vite proxies `/live` to it:
 
 ```bash
 cd extras
@@ -25,58 +48,14 @@ npm ci
 npm run dev
 ```
 
-Open [the scenario viewer](http://127.0.0.1:5173). Click a scenario to start its illustration, or use **Run scenario** for the initially selected one. Pause, resume, move between steps, change playback speed, and replay without backend setup. Reduced-motion preferences are respected.
-
-The **Walkthrough case** selector groups additional edge cases under the six primary scenarios. Choosing a case starts a fresh illustration and resets playback and its coverage notes:
-
-- **Matching:** SELL-taker symmetry, a partially filled taker resting at its limit, and a matching commit followed by crash, restore, and duplicate event redelivery.
-- **Request retries:** 25 concurrent identical requests under one key, with one acceptance and receipt replays.
-- **Validation/conflicts:** excess price precision or zero quantity returning 400 before acceptance writes.
-- **Delivery:** a transient 503 with Retry-After, permanent 400 followed by explicit redrive, and retry-budget exhaustion. The exhaustion example explicitly configures a small two-attempt budget for the illustration; it does not describe the application default.
-
-These cases are authored walkthroughs, not live fault injection. The crash case distinguishes an unavailable RAM cache from durable database records; replay leaves the original trades and restored quantities unchanged. Operator redrive is represented as the existing CLI command, not an invented HTTP endpoint.
-
-The canvas supports scroll-to-zoom, background dragging to pan, and zoom/fit buttons. Focus the canvas for keyboard controls: `+` / `-` zoom, `0` fits, and arrow keys pan. Green identifies current work, dashed blue identifies the next step, and purple identifies explicitly parallel branches. Request paths are solid green; response paths are dashed blue. The compact scenario strip replaces the tall sidebar.
-
-Scenario buttons show play and Run/Replay actions. Below the flow, expand **Challenge & review relevance** for the selected scenario's requirement connection, suggested review signals, design decision, and backend test paths to inspect. These are suggested signals, not an official employer scoring rubric. Request-idempotency cases are explicitly marked as implementation extensions.
-
-**View 1** shows the system overview. Check **View 2 · Show internals** to expand the system diagram into Order API and Matching subflows. Each component can be collapsed independently. A moving marker follows the explanatory internal steps during playback. Hover, keyboard-focus, or tap a step for its description; Escape dismisses it. Switching views preserves playback; the internal phases are authored explanations, not captured backend spans.
-
-View 2 also includes the Outbox publisher and notification worker. Scenario focus opens the relevant component: request handling for duplicate/conflicting requests, matching for price/FIFO cases, publication for Kafka recovery, and delivery for a lost response. The current component opens automatically unless manually overridden. Tooltips distinguish challenge requirements from implementation choices and explain the reason for each approach. Failure branches are labeled separately from the success path.
-
-Each journey starts with a labeled client request. Preconditions identify any orders already resting in the book. The current request, decision, and implementing source path are shown at each step. Both views use that same sequence; the internal diagram has no separate playback clock. Retries explicitly resume at their owner: the client for a repeated order request, the Outbox for publication, or the notification worker for delivery. The committed book stays unchanged during match computation and updates after commit.
+The default runner target is `http://127.0.0.1:8084`; set `VIEWER_URL` when using a different port. `npm run live` can run the Node runner on the host after building the root backend and frontend, but the Kafka interruption case requires the Docker VIEWER listener.
 
 ```bash
 npm test
 npm run build
-npm run preview
+VIEWER_URL=http://127.0.0.1:8084 npm run test:browser
 ```
 
-The preview command serves the production build on Vite's preview port, normally `4173`.
+Install Playwright's Chromium once with `npx playwright install chromium`. Browser tests click the real UI, verify actual order/trade UUIDs, exercise all live scenarios/cases, check offline errors, and reject concurrent/cross-origin controls. They require the Docker runner; they do not stub successful backend results.
 
-For the browser smoke tests, install Playwright's Chromium once, then run:
-
-```bash
-npx playwright install chromium
-npm run test:browser
-```
-
-The browser checks exercise all six scenario buttons, matching playback, replay and pause, the delivery retry path, keyboard tabs, mobile widths, and reduced motion. They verify the frontend illustration, not backend guarantees.
-
-## Structure
-
-```text
-extras/
-  frontend/
-    App.tsx          Scenario selection, system flow, book, and example details
-    scenarios.ts    Authored explanations and illustrative frames
-    playback.ts     Playback state and transitions
-    styles.css      Responsive layout and reduced-motion styles
-    main.tsx        Frontend entry point
-  tests/
-    playback.test.ts
-  package.json      Independent dependencies and commands
-  vite.config.ts
-```
-
-The main backend has no imports or runtime dependency on this directory. Its root lint configuration excludes `extras/`, so reviewers can run challenge checks without installing the optional frontend. All frontend code, interfaces, configuration, generated files, and its lockfile stay here.
+The optional viewer stays outside `src/`. The backend's own build and runtime do not import it.

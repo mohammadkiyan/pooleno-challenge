@@ -1,4 +1,4 @@
-import type { Frame, NodeId } from "./scenarios";
+import type { Frame, NodeId } from "./flow-types";
 export function nodeState(id: NodeId, frame: Frame, next?: Frame) {
   if (frame.blocked.includes(id)) return "blocked";
   if (frame.parallel.includes(id)) return "parallel";

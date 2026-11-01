@@ -46,9 +46,9 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       # Containers connect to kafka:19092 and the host to 127.0.0.1:29092.
-      KAFKA_LISTENERS: INTERNAL://:19092,HOST://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,HOST://127.0.0.1:${HOST_PORT_KAFKA:-29092}
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://:19092,HOST://:9092,CONTROLLER://:9093,VIEWER://:19094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,HOST://127.0.0.1:${HOST_PORT_KAFKA:-29092},VIEWER://viewer:19094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT,VIEWER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -184,16 +184,28 @@ services:
       timeout: 2s
       retries: 30
 
-  # The illustrated scenarios. A static page that calls nothing, so it depends on no service.
+  # Executes the same compiled backend in disposable databases/topics.
+  # Only this Kafka listener goes through the viewer's interruptible TCP link.
   viewer:
-    build: ./extras
+    build:
+      context: .
+      dockerfile: extras/Dockerfile
     image: pooleno-scenario-viewer:local
-    # Vite runs as PID 1 otherwise, which ignores SIGTERM and makes every stop wait out the grace period.
     init: true
+    stop_grace_period: 15s
+    environment:
+      VIEWER_DATABASE_URL: postgres://pooleno@postgres:5432/postgres
+      VIEWER_KAFKA_BROKERS: viewer:19094
+      VIEWER_KAFKA_UPSTREAM: kafka
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${HOST_PORT_VIEWER:-8084}:4173"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/live/health"]
       interval: 1s
       timeout: 2s
       retries: 30

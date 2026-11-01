@@ -64,3 +64,8 @@ describe("scenario playback", () => {
     ).toEqual(initialPlayback);
   });
 });
+
+it("selects the latest observed frame without starting another execution", () => {
+  expect(playbackReducer(initialPlayback, { type: "seek", frame: 9, total: 10 })).toEqual({ frame: 9, status: "paused" });
+  expect(playbackReducer(initialPlayback, { type: "seek", frame: 99, total: 10 }).frame).toBe(9);
+});

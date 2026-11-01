@@ -35,10 +35,12 @@ import { initialPlayback, playbackReducer } from "./playback";
 import { FlowCanvas } from "./FlowCanvas";
 import { nodeState } from "./flow-state";
 import { InternalFlow } from "./InternalFlow";
-import { walkthroughVariants } from "./walkthrough-variants";
+import { liveScenarios, liveVariants } from "../shared/live.ts";
+import { useLiveRun } from "./use-live-run";
 import { scenarioCoverage } from "./scenario-coverage";
-import { firstScenario, scenarios } from "./scenarios";
-import type { BookOrder, Frame, NodeId } from "./scenarios";
+const scenarios = liveScenarios;
+const firstScenario = scenarios[0];
+import type { BookOrder, Frame, NodeId } from "./flow-types";
 
 const icons: LucideIcon[] = [
   ArrowDownUp,
@@ -383,38 +385,50 @@ export function App() {
   const [showInternals, setShowInternals] = useState(false);
   const [tab, setTab] = useState<"explanation" | "request">("explanation");
   const reducedMotion = useReducedMotion();
+  const live = useLiveRun();
   const family = scenarios[selectedIndex] ?? firstScenario;
-  const variants = walkthroughVariants[family.id] ?? [];
+  const variants = liveVariants[family.id];
   const variant = variants.find((item) => item.id === variantId);
-  const scenario = variant
-    ? { ...family, ...variant, id: family.id, title: family.title }
-    : family;
-  const coverage = variant?.coverage ?? scenarioCoverage[family.id];
-  const frame = scenario.frames[playback.frame];
-  if (!frame) throw new Error("The selected scenario frame is missing");
+  const run = live.run?.scenarioId === family.id && live.run.variantId === variantId ? live.run : undefined;
+  const empty: Frame = {
+    title: live.busy ? "Starting real backend…" : "Ready to run against the backend",
+    detail: "Run a scenario to submit real HTTP requests and inspect persisted results. Every run gets a fresh disposable sandbox.",
+    active: [], blocked: [], parallel: [], book: [], trades: [], facts: [], request: "No request sent yet.", response: "No backend evidence captured yet.", requestLabel: "Waiting for a run", decision: "Results appear only after backend observations.", source: "", phase: null, transfers: [],
+  };
+  const scenario = { ...family, frames: run?.frames.length ? run.frames : [empty], guarantee: "Checks compare observed backend results with the scenario contract.", outcome: run ? `${run.checks.filter(c => c.passed).length} backend checks passed${run.status === "running" ? "; execution or cleanup is still running." : run.status === "failed" ? "; the run failed. Inspect the error and captured evidence." : ". The disposable sandbox has been cleaned up."}` : "Run the scenario to observe its actual outcome." };
+  const coverage = scenarioCoverage[family.id];
   const total = scenario.frames.length;
-  const playing = playback.status === "playing";
-  const complete = playback.status === "complete";
-
+  const currentIndex = live.busy ? total - 1 : Math.min(playback.frame, total - 1);
+  const frame = scenario.frames[currentIndex]!;
+  const playing = playback.status === "playing" && !live.busy;
+  const complete = run?.status === "passed";
+  useEffect(() => {
+    if (live.run) {
+      const index = scenarios.findIndex(s => s.id === live.run!.scenarioId);
+      setSelectedIndex(index < 0 ? 0 : index);
+      setVariantId(live.run.variantId);
+    }
+  }, [live.run?.id]);
+  useEffect(() => {
+    if (run?.status !== "running" && run?.frames.length) dispatch({ type: "seek", frame: run.frames.length - 1, total: run.frames.length });
+  }, [run?.status]);
   useEffect(() => {
     if (!playing) return;
-    const timer = window.setTimeout(() => {
-      dispatch({ type: "advance", total });
-    }, 2100 / speed);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [playing, playback.frame, speed, total, selectedIndex, variantId]);
+    const timer = window.setTimeout(() => dispatch({ type: "advance", total }), 2100 / speed);
+    return () => window.clearTimeout(timer);
+  }, [playing, playback.frame, speed, total]);
 
   function selectScenario(index: number) {
     setSelectedIndex(index);
     setVariantId("");
     setTab("explanation");
-    dispatch({ type: "run" });
+    dispatch({ type: "reset" });
+    void live.start(scenarios[index]!.id, "");
   }
 
   function togglePlayback() {
     if (playing) dispatch({ type: "pause" });
+    else if (currentIndex === total - 1) dispatch({ type: "run" });
     else if (playback.status === "paused") dispatch({ type: "resume" });
     else dispatch({ type: "run" });
   }
@@ -437,15 +451,15 @@ export function App() {
           </a>
           <div className="header-label">
             <span className="preview-dot" />
-            Illustrated preview
-            <span className="optional-label">OPTIONAL EXTRA</span>
+            Live backend
+            <span className="optional-label">REAL EXECUTION</span>
           </div>
         </header>
 
         <div className="workspace">
           <div className="scenario-strip-heading">
-            <strong>Choose a scenario to play</strong>
-            <span>Click any scenario to start its walkthrough</span>
+            <strong>Choose a scenario to run</strong>
+            <span>Click a scenario to execute it against the real backend</span>
           </div>
           <aside className="sidebar" aria-label="Prepared scenarios">
             <div className="sidebar-heading">
@@ -455,7 +469,7 @@ export function App() {
             <p className="sidebar-description">
               One click. One edge case.
               <br />
-              Follow the expected behavior.
+              Inspect observed backend results.
             </p>
             {(["Matching", "Reliability"] as const).map((category) => (
               <div className="scenario-group" key={category}>
@@ -469,6 +483,7 @@ export function App() {
                       key={item.id}
                       className={`scenario-button${selectedIndex === index ? " selected" : ""}`}
                       aria-pressed={selectedIndex === index}
+                      disabled={live.busy}
                       onClick={() => {
                         selectScenario(index);
                       }}
@@ -479,7 +494,7 @@ export function App() {
                       <span className="scenario-label">
                         <strong>{item.title}</strong>
                         <span>
-                          {scenarioCoverage[item.id]?.area ?? item.tags[0]}
+                          {scenarioCoverage[item.id]?.area ?? item.category}
                         </span>
                       </span>
                       <span className="scenario-action">
@@ -487,7 +502,7 @@ export function App() {
                         <span>
                           {selectedIndex === index &&
                           playback.status !== "ready"
-                            ? "Replay"
+                            ? "Run again"
                             : "Run"}
                         </span>
                       </span>
@@ -501,8 +516,7 @@ export function App() {
               <div>
                 <strong>A window into the backend</strong>
                 <p>
-                  Optional visual walkthroughs, separate from the challenge
-                  implementation.
+                  Real backend execution, with isolated scenario data and captured evidence.
                 </p>
               </div>
             </div>
@@ -523,38 +537,32 @@ export function App() {
               <button
                 type="button"
                 className="primary-button"
-                onClick={togglePlayback}
+                disabled={live.busy}
+                onClick={() => { dispatch({ type: "reset" }); void live.start(family.id, variantId); }}
               >
-                {playing ? (
-                  <Pause size={16} fill="currentColor" />
-                ) : complete ? (
+                {run ? (
                   <RotateCcw size={16} />
                 ) : (
                   <Play size={16} fill="currentColor" />
                 )}
-                {playing
-                  ? "Pause"
-                  : complete
-                    ? "Replay scenario"
-                    : playback.status === "paused"
-                      ? "Resume"
-                      : "Run scenario"}
+                {live.busy ? "Running backend…" : run ? "Run again" : "Run scenario"}
               </button>
             </section>
 
             {variants.length > 0 && (
               <div className="variant-selector">
-                <label htmlFor="walkthrough-case">Walkthrough case</label>
+                <label htmlFor="walkthrough-case">Scenario case</label>
                 <select
                   id="walkthrough-case"
+                  disabled={live.busy}
                   value={variantId}
                   onChange={(event) => {
                     setVariantId(event.target.value);
                     setTab("explanation");
-                    dispatch({ type: "run" });
+                    dispatch({ type: "reset" });
                   }}
                 >
-                  <option value="">Primary walkthrough</option>
+                  <option value="">Primary scenario</option>
                   {variants.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.label}
@@ -562,20 +570,22 @@ export function App() {
                   ))}
                 </select>
                 <span>
-                  {variant
-                    ? variant.description
-                    : "Choose an edge case to play"}
+                  Choose a case, then run it against the backend.
                 </span>
               </div>
             )}
             <div className="preview-note">
               <Info size={15} />
               <span>
-                Authored illustration of expected behavior. This preview does
-                not connect to the backend.
+                Real API requests, PostgreSQL records and Kafka delivery. Each run uses an isolated sandbox. The diagram highlights observed milestones; internal boxes explain the implementation.
               </span>
             </div>
 
+            {live.error && <div role="alert" className="live-error">{live.error}</div>}
+            <div className="live-run-status" data-state={run?.status ?? "ready"} role="status">
+              <strong>{live.busy ? "BACKEND RUNNING" : run?.status === "passed" ? "RUN VERIFIED" : run?.status === "failed" ? "RUN FAILED" : "READY"}</strong>
+              {run && <span>Run {run.id} · {run.startedAt} · {run.checks.length} checks</span>}
+            </div>
             <div className="request-context">
               <span>FOLLOWING</span>
               <strong>{frame.requestLabel}</strong>
@@ -632,8 +642,8 @@ export function App() {
                 <strong>Now: {frame.title}</strong>
                 <span>
                   Next:{" "}
-                  {scenario.frames[playback.frame + 1]?.title ??
-                    "End of walkthrough"}
+                  {scenario.frames[currentIndex + 1]?.title ??
+                    (run?.status === "running" ? "Awaiting the next backend observation" : "End of captured observations")}
                 </span>
               </div>
               <FlowCanvas>
@@ -643,15 +653,15 @@ export function App() {
                     recovery={variantId === "crash-replay"}
                     scenarioId={scenario.id}
                     frame={frame}
-                    next={scenario.frames[playback.frame + 1]}
+                    next={scenario.frames[currentIndex + 1]}
                     playing={playing}
                     speed={speed}
                   />
                 ) : (
                   <SystemFlow
                     frame={frame}
-                    next={scenario.frames[playback.frame + 1]}
-                    index={playback.frame}
+                    next={scenario.frames[currentIndex + 1]}
+                    index={currentIndex}
                     playing={playing}
                   />
                 )}
@@ -662,7 +672,7 @@ export function App() {
                     type="button"
                     className="icon-button"
                     aria-label="Previous step"
-                    disabled={playback.frame === 0}
+                    disabled={live.busy || currentIndex === 0}
                     onClick={() => {
                       dispatch({ type: "step", direction: -1, total });
                     }}
@@ -672,7 +682,8 @@ export function App() {
                   <button
                     type="button"
                     className="icon-button"
-                    aria-label={playing ? "Pause playback" : "Play playback"}
+                    aria-label={playing ? "Pause recorded observations" : "Play recorded observations"}
+                    disabled={live.busy || !run?.frames.length}
                     onClick={togglePlayback}
                   >
                     {playing ? <Pause size={15} /> : <Play size={15} />}
@@ -681,7 +692,7 @@ export function App() {
                     type="button"
                     className="icon-button"
                     aria-label="Next step"
-                    disabled={playback.frame === total - 1}
+                    disabled={live.busy || currentIndex === total - 1}
                     onClick={() => {
                       dispatch({ type: "step", direction: 1, total });
                     }}
@@ -689,27 +700,27 @@ export function App() {
                     <ChevronRight size={17} />
                   </button>
                   <span className="step-count">
-                    {String(playback.frame + 1).padStart(2, "0")}
+                    {String(currentIndex + 1).padStart(2, "0")}
                     <span> / {String(total).padStart(2, "0")}</span>
                   </span>
                 </div>
                 <div
                   className="step-track"
                   role="progressbar"
-                  aria-label="Illustration progress"
+                  aria-label="Captured observations"
                   aria-valuemin={1}
                   aria-valuemax={total}
-                  aria-valuenow={playback.frame + 1}
+                  aria-valuenow={currentIndex + 1}
                 >
                   {scenario.frames.map((_, index) => (
                     <span
                       key={index}
-                      className={index <= playback.frame ? "filled" : ""}
+                      className={index <= currentIndex ? "filled" : ""}
                     />
                   ))}
                 </div>
                 <label className="speed-control">
-                  <span>Speed</span>
+                  <span>Review speed</span>
                   <select
                     aria-label="Playback speed"
                     value={speed}
@@ -826,7 +837,7 @@ export function App() {
                     }}
                   >
                     <Braces size={15} />
-                    Example data
+                    Backend data
                   </button>
                 </div>
                 <div
@@ -843,8 +854,8 @@ export function App() {
                     </span>
                     <span>
                       {complete
-                        ? "ILLUSTRATION COMPLETE"
-                        : `STEP ${String(playback.frame + 1).padStart(2, "0")}`}
+                        ? "CAPTURED OBSERVATION"
+                        : `STEP ${String(currentIndex + 1).padStart(2, "0")}`}
                     </span>
                   </div>
                   <div
@@ -883,9 +894,9 @@ export function App() {
                   aria-labelledby="request-tab"
                   hidden={tab !== "request"}
                 >
-                  <span className="code-label">ILLUSTRATIVE REQUEST</span>
+                  <span className="code-label">ACTUAL REQUEST / OBSERVATION</span>
                   <pre>{frame.request}</pre>
-                  <span className="code-label">EXPECTED RESPONSE / STATE</span>
+                  <span className="code-label">CAPTURED RESPONSE / STATE</span>
                   <pre>{frame.response}</pre>
                 </div>
               </section>
@@ -976,27 +987,34 @@ export function App() {
 
             <section
               className={`expected-outcome${complete ? " outcome-complete" : ""}`}
-              aria-label="Expected scenario outcome"
+              aria-label="Observed scenario outcome"
             >
               <span className="outcome-icon">
                 <ShieldCheck size={20} />
               </span>
               <div>
-                <span>EXPECTED OUTCOME</span>
+                <span>OBSERVED OUTCOME</span>
                 <p>{scenario.outcome}</p>
               </div>
               <span className="outcome-label">
-                {complete ? "Illustrated" : "Follow the flow"}
+                {complete ? "Verified" : run?.status === "failed" ? "Failed" : "Awaiting evidence"}
                 <ArrowUpRight size={14} />
               </span>
             </section>
+            {run && <section className="panel live-evidence" aria-label="Backend evidence">
+              <div className="panel-heading"><h3>Captured backend evidence</h3><a href={`/live/runs/${run.id}`} target="_blank" rel="noreferrer">Full run JSON</a></div>
+              <p>API order reads, database records and destination effects are captured at nearby times; they are not a distributed atomic snapshot.</p>
+              <ul className="live-checks">{run.checks.map((check, i) => <li key={i} className={check.passed ? "check-passed" : "check-failed"}>{check.passed ? "✓" : "✕"} {check.claim}</li>)}</ul>
+              <details open><summary>Orders, trades, Outbox, jobs and effects</summary><pre data-testid="live-evidence">{JSON.stringify("snapshot" in frame ? frame.snapshot : {}, null, 2)}</pre></details>
+              <details><summary>Actual process logs ({run.logs.length})</summary><pre>{run.logs.map(log => `[${log.role}] ${log.line}`).join("\n")}</pre></details>
+            </section>}
             <footer className="page-footer">
               <span>
                 <FlaskConical size={13} />
-                Built to explain the implementation.
+                Executing the actual implementation.
               </span>
               <span>
-                Frontend preview · Backend verification lives in the test suite.
+                Live captures · Isolated disposable runtime · External destination uses the challenge mock API.
               </span>
             </footer>
           </main>

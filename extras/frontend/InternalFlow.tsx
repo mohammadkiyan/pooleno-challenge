@@ -1,7 +1,7 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { nodeState, isResponse } from "./flow-state";
-import type { Frame, NodeId } from "./scenarios";
+import type { Frame, NodeId } from "./flow-types";
 import { createPortal } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -406,7 +406,7 @@ export function InternalFlow({
   }, []);
   const current = frame.phase;
   const response = isResponse(frame);
-  // Each service has its own expansion state. Only authored phases animate; these are not backend spans.
+  // Each service has its own expansion state. Only observed milestones highlight stages; other boxes explain code and are not captured spans.
   function group(
     title: string,
     id: GroupId,

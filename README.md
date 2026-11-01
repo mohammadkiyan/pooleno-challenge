@@ -93,7 +93,7 @@ The walkthrough leaves sell orders resting at 100 on `ETH-USD`, so this one trad
 - [Testing](docs/testing.md): how to run the tests, the results, and every injected failure with what it proves.
 - [ADRs](docs/adr): the reasoning and evidence behind [tooling and budgets](docs/adr/0001-tooling-and-budgets.md), [messaging and matching](docs/adr/0002-messaging-and-matching.md), [external notifications](docs/adr/0003-external-notifications.md), [shutdown, health and visibility](docs/adr/0004-shutdown-health-and-visibility.md), and [NestJS on Fastify](docs/adr/0005-nestjs-on-fastify.md).
 
-[extras/](extras) holds the scenario viewer that `./review.sh` opens. It illustrates the main scenarios and their edge cases with authored examples, not live traffic, and the backend doesn't depend on it.
+[extras/](extras) holds the scenario viewer that `./review.sh` opens. It executes the actual backend in disposable sandbox databases and Kafka topics, displays observed orders/trades and delivery results, and checks each scenario. The backend does not depend on it. See [the viewer guide](extras/README.md) for isolation and fault controls.
 
 ## Develop on the host
 

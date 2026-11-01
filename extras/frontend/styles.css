@@ -2545,3 +2545,19 @@ button svg {
     flex-basis: 100%;
   }
 }
+
+/* Real execution and captured evidence. */
+button:disabled { cursor: wait; opacity: .5; }
+.live-run-status { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 12px; }
+.live-run-status strong { color: var(--teal); }
+.live-error { padding: 16px; border: 1px solid #e4a5ad; color: #982b3b; background: #fff2f3; border-radius: 10px; margin: 12px 0; overflow-wrap: anywhere; }
+.live-evidence { margin-top: 20px; padding: 20px; min-width: 0; }
+.live-evidence p { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.live-evidence a { color: var(--teal); }
+.live-evidence details { margin-top: 16px; }
+.live-evidence summary { cursor: pointer; font-size: 13px; }
+.live-evidence pre { max-height: 420px; overflow: auto; background: #0a1117; color: #b8cdd0; padding: 16px; font-size: 12px; line-height: 1.6; border-radius: 8px; }
+.live-checks { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,280px),1fr)); gap: 8px 20px; list-style: none; padding: 0; font-size: 13px; }
+.check-passed { color: var(--teal); } .check-failed { color: #982b3b; }
+
+.live-run-status[data-state="failed"] strong { color: #982b3b; }

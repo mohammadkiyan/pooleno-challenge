@@ -11,3 +11,9 @@
 !scripts/
 !vitest.config.ts
 !eslint.config.js
+
+!extras/
+extras/node_modules/
+extras/dist/
+extras/test-results/
+extras/playwright-report/
