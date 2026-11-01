@@ -2247,3 +2247,232 @@ button svg {
     height: 420px;
   }
 }
+.flow-world .deep-consumers {
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+.flow-world .deep-delivery {
+  min-height: 70px;
+}
+.deep-bus > .deep-component {
+  max-width: 920px;
+}
+.deep-branch {
+  border-left: 1px dashed #b08d55;
+  padding-left: 9px;
+}
+.branch-tag {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #856132;
+}
+.scenario-focus {
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  color: #34735a;
+  border: 1px solid #a1c5b3;
+  border-radius: 4px;
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+.rationale-kind {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #407960;
+  margin-bottom: 8px;
+}
+.rationale-why {
+  border-top: 1px solid #dce8e0;
+  padding-top: 9px;
+}
+.deep-tooltip {
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+}
+.scenario-strip-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 28px 0;
+  background: white;
+  font-size: 11px;
+  color: #587366;
+}
+.scenario-strip-heading strong {
+  font-weight: 550;
+  color: #365d4c;
+}
+.scenario-strip-heading > span {
+  font-size: 11px;
+}
+.sidebar {
+  padding-top: 10px;
+}
+.scenario-button {
+  border: 1px solid #d6e2dc;
+  box-shadow: 0 2px 3px #1c412b08;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.scenario-button.selected {
+  border-color: #5e9e83;
+  box-shadow: inset 0 0 0 1px #5e9e83;
+}
+.scenario-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #39755a;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 550;
+}
+.scenario-button:hover {
+  background: #e6f3eb;
+  border-color: #4a9473;
+  box-shadow: 0 3px 8px #1c412b16;
+}
+.scenario-button:active {
+  background: #dceee4;
+  border-color: #347b58;
+}
+.scenario-button:focus-visible {
+  outline: 3px solid #7cbea2;
+  outline-offset: 3px;
+}
+.scenario-coverage {
+  margin-top: 15px;
+  border: 1px solid #dbe7df;
+  border-radius: 8px;
+  background: #fbfdfc;
+  overflow: hidden;
+}
+.scenario-coverage summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+  color: #37634d;
+  font-size: 12px;
+}
+.scenario-coverage summary::-webkit-details-marker {
+  display: none;
+}
+.scenario-coverage summary strong {
+  font-weight: 550;
+}
+.scenario-coverage summary > span {
+  margin-left: auto;
+  color: #60796a;
+  font-size: 11px;
+}
+.scenario-coverage[open] summary > svg:last-child {
+  transform: rotate(90deg);
+}
+.scenario-coverage summary:focus-visible {
+  outline: 3px solid #7cbea2;
+  outline-offset: -3px;
+}
+.coverage-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 22px;
+  padding: 17px;
+  border-top: 1px solid #e1eae5;
+}
+.coverage-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: #607d6b;
+  margin-bottom: 9px;
+}
+.coverage-kind {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #376c50;
+  background: #edf5ef;
+  border: 1px solid #d4e4d9;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.coverage-content p,
+.coverage-content li {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #486653;
+}
+.coverage-content p {
+  margin: 9px 0 13px;
+}
+.coverage-content ul {
+  margin: 0 0 10px;
+  padding-left: 17px;
+}
+.coverage-content small {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #65796a;
+}
+.coverage-content code {
+  display: block;
+  overflow-wrap: anywhere;
+  font: 11px/1.9 var(--mono);
+  color: #52735e;
+}
+.scenario-coverage summary:hover {
+  background: #f0f7f2;
+}
+@media (max-width: 1100px) {
+  .coverage-content {
+    grid-template-columns: 1fr 1fr;
+  }
+  .coverage-content > div:last-child {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 650px) {
+  .scenario-strip-heading {
+    padding: 10px 12px 0;
+    font-size: 11px;
+  }
+  .scenario-strip-heading > span {
+    display: none;
+  }
+  .scenario-action {
+    gap: 0;
+  }
+  .scenario-action > span {
+    display: none;
+  }
+  .scenario-action svg {
+    width: 12px;
+  }
+  .scenario-button {
+    gap: 5px;
+  }
+  .scenario-coverage summary {
+    padding: 12px;
+    font-size: 11px;
+    flex-wrap: wrap;
+  }
+  .scenario-coverage summary > span {
+    margin-left: 0;
+  }
+  .coverage-content {
+    grid-template-columns: 1fr;
+    gap: 17px;
+    padding: 13px;
+  }
+  .coverage-content > div:last-child {
+    grid-column: auto;
+  }
+}

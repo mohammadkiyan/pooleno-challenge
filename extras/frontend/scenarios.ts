@@ -16,7 +16,16 @@ export type PhaseId =
   | "match-price"
   | "match-fill"
   | "match-save"
-  | "match-book";
+  | "match-book"
+  | "publish-read"
+  | "publish-send"
+  | "publish-mark"
+  | "publish-retry"
+  | "notify-inbox"
+  | "notify-send"
+  | "notify-retry"
+  | "notify-response"
+  | "notify-complete";
 export interface BookOrder {
   id: string;
   side: "BUY" | "SELL";
@@ -193,16 +202,25 @@ function publish(frames: Frame[]) {
     ["database", "outbox"],
     "Preserve per-symbol order; do not skip an earlier pending event.",
     messaging + "publish-outbox.ts",
-    { transfers: [["database", "outbox"]] },
+    { phase: "publish-read", transfers: [["database", "outbox"]] },
   );
   next(
     frames,
-    "Publish to Kafka, then mark sent",
-    "Send the stored event keyed by symbol. Only after broker acknowledgement mark the Outbox row published.",
+    "Send the acceptance event to Kafka",
+    "Send the stored event keyed by symbol and wait for broker acknowledgement. Publication has not yet been marked in PostgreSQL.",
     ["outbox", "kafka"],
     "Broker acknowledges → mark published; an uncertain send may replay the same event.",
     messaging + "publish-outbox.ts",
-    { transfers: [["outbox", "kafka"]] },
+    { phase: "publish-send", transfers: [["outbox", "kafka"]] },
+  );
+  next(
+    frames,
+    "Mark the acknowledged event published",
+    "Kafka has acknowledged the send. Now record published_at in PostgreSQL. If this write fails, a successor can resend the same event and consumers deduplicate it.",
+    ["outbox", "database"],
+    "Only broker acknowledgement permits marking; no distributed transaction spans the database and Kafka.",
+    messaging + "publish-outbox.ts → markPublished",
+    { phase: "publish-mark" },
   );
 }
 function guard(frames: Frame[]) {
@@ -465,7 +483,7 @@ next(
   ["kafka", "worker", "database"],
   "Persist the job before advancing this consumer’s offset.",
   external + "schedule-notification.ts",
-  { transfers: [["kafka", "worker"]] },
+  { phase: "notify-inbox", transfers: [["kafka", "worker"]] },
 );
 next(
   lost,
@@ -475,6 +493,7 @@ next(
   "Use a stable destination key for all attempts of this job.",
   external + "external-client.ts",
   {
+    phase: "notify-send",
     requestLabel: "N1 · notification for S1",
     request: "POST /v1/notifications\nIdempotency-Key: external-notify:event-A",
     transfers: [["worker", "external"]],
@@ -492,6 +511,7 @@ next(
   "Unknown remote outcome → retry the same job and key; do not assume it failed remotely.",
   external + "notification-worker.ts",
   {
+    phase: "notify-retry",
     blocked: ["external"],
     response: "Connection closed; local outcome uncertain",
   },
@@ -504,6 +524,7 @@ next(
   "Retry starts at the worker, not the client or Kafka.",
   external + "notification-worker.ts",
   {
+    phase: "notify-send",
     blocked: [],
     transfers: [["worker", "external"]],
     facts: [
@@ -521,6 +542,7 @@ next(
   "Acknowledge the original effect; do not create another one.",
   external + "external-client.ts",
   {
+    phase: "notify-response",
     transfers: [["external", "worker"]],
     response: "200 OK\nidempotent-replayed: true",
   },
@@ -533,6 +555,7 @@ next(
   "Two attempts, one effect → delivery confirmed.",
   external + "external-job.repository.ts → markJobSucceeded",
   {
+    phase: "notify-complete",
     facts: [
       ["Delivery attempts", "2"],
       ["Destination effects", "1"],
@@ -557,7 +580,7 @@ next(
   ["database", "outbox"],
   "Database work is durable even though Kafka is unavailable.",
   messaging + "publish-outbox.ts",
-  { transfers: [["database", "outbox"]] },
+  { phase: "publish-read", transfers: [["database", "outbox"]] },
 );
 next(
   outage,
@@ -567,6 +590,7 @@ next(
   "Send failure → retain and retry; never mark the event published.",
   messaging + "publish-outbox.ts",
   {
+    phase: "publish-retry",
     facts: [
       ["Order status", "QUEUED"],
       ["Pending events", "1"],
@@ -580,8 +604,18 @@ next(
   ["outbox", "kafka"],
   "Retry starts at the Outbox; no second client order is needed.",
   messaging + "publish-outbox.ts",
-  { blocked: [], transfers: [["outbox", "kafka"]] },
+  { phase: "publish-send", blocked: [], transfers: [["outbox", "kafka"]] },
 );
+next(
+  outage,
+  "Mark the recovered event published",
+  "After Kafka acknowledges, persist the publication marker. The accepted order itself was already durable.",
+  ["outbox", "database"],
+  "Broker ACK first, published_at second.",
+  messaging + "publish-outbox.ts → markPublished",
+  { phase: "publish-mark" },
+);
+
 guard(outage);
 next(
   outage,

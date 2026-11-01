@@ -35,6 +35,7 @@ import { initialPlayback, playbackReducer } from "./playback";
 import { FlowCanvas } from "./FlowCanvas";
 import { nodeState } from "./flow-state";
 import { InternalFlow } from "./InternalFlow";
+import { scenarioCoverage } from "./scenario-coverage";
 import { firstScenario, scenarios } from "./scenarios";
 import type { BookOrder, Frame, NodeId } from "./scenarios";
 
@@ -381,6 +382,7 @@ export function App() {
   const [tab, setTab] = useState<"explanation" | "request">("explanation");
   const reducedMotion = useReducedMotion();
   const scenario = scenarios[selectedIndex] ?? firstScenario;
+  const coverage = scenarioCoverage[scenario.id];
   const frame = scenario.frames[playback.frame];
   if (!frame) throw new Error("The selected scenario frame is missing");
   const total = scenario.frames.length;
@@ -433,6 +435,10 @@ export function App() {
         </header>
 
         <div className="workspace">
+          <div className="scenario-strip-heading">
+            <strong>Choose a scenario to play</strong>
+            <span>Click any scenario to start its walkthrough</span>
+          </div>
           <aside className="sidebar" aria-label="Prepared scenarios">
             <div className="sidebar-heading">
               <span>SCENARIOS</span>
@@ -464,9 +470,19 @@ export function App() {
                       </span>
                       <span className="scenario-label">
                         <strong>{item.title}</strong>
-                        <span>{item.tags[0]}</span>
+                        <span>
+                          {scenarioCoverage[item.id]?.area ?? item.tags[0]}
+                        </span>
                       </span>
-                      <ChevronRight size={14} className="scenario-chevron" />
+                      <span className="scenario-action">
+                        <Play size={12} fill="currentColor" />
+                        <span>
+                          {selectedIndex === index &&
+                          playback.status !== "ready"
+                            ? "Replay"
+                            : "Run"}
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
@@ -589,6 +605,8 @@ export function App() {
               <FlowCanvas>
                 {showInternals ? (
                   <InternalFlow
+                    key={scenario.id}
+                    scenarioId={scenario.id}
                     frame={frame}
                     next={scenario.frames[playback.frame + 1]}
                     playing={playing}
@@ -671,6 +689,49 @@ export function App() {
                 </label>
               </div>
             </section>
+
+            {coverage && (
+              <details key={scenario.id} className="scenario-coverage">
+                <summary>
+                  <ShieldCheck size={16} />
+                  <strong>Challenge & review relevance</strong>
+                  <span>{coverage.area}</span>
+                  <ChevronRight size={14} />
+                </summary>
+                <div className="coverage-content">
+                  <div>
+                    <span className="coverage-label">Challenge connection</span>
+                    <strong className="coverage-kind">{coverage.kind}</strong>
+                    <p>{coverage.requirement}</p>
+                  </div>
+                  <div>
+                    <span className="coverage-label">
+                      What the reviewer can assess
+                    </span>
+                    <ul>
+                      {coverage.signals.map((signal) => (
+                        <li key={signal}>{signal}</li>
+                      ))}
+                    </ul>
+                    <small>
+                      Suggested review signals, not an official scoring rubric.
+                    </small>
+                  </div>
+                  <div>
+                    <span className="coverage-label">
+                      Implementation judgment
+                    </span>
+                    <p>{coverage.choice}</p>
+                    <span className="coverage-label">
+                      Backend evidence to inspect
+                    </span>
+                    {coverage.evidence.map((path) => (
+                      <code key={path}>{path}</code>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            )}
 
             <div className="detail-grid">
               <section

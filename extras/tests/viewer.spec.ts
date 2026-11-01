@@ -191,6 +191,8 @@ test("view 2 expands diagram components and reveals detail on hover", async ({
   await page.goto("/");
   await page.getByRole("checkbox", { name: "View 2 · Show internals" }).check();
   const api = page.getByRole("button", { name: "Order API internals" });
+  await expect(api).toHaveAttribute("aria-expanded", "false");
+  await api.click();
   await expect(api).toHaveAttribute("aria-expanded", "true");
   await api.click();
   await expect(api).toHaveAttribute("aria-expanded", "false");
@@ -291,7 +293,17 @@ test("canvas zoom and flow states make directions and parallel branches explicit
     await page.getByRole("button", { name: "Next step", exact: true }).click();
   await expect(page.locator(".edge-response.edge-active")).toHaveCount(1);
   await expect(page.getByText("Response path", { exact: true })).toBeVisible();
-  for (let i = 0; i < 3; i++)
+  for (
+    let i = 0;
+    i < 20 &&
+    !(await page
+      .getByRole("heading", {
+        name: "Dispatch to independent consumer groups",
+        exact: true,
+      })
+      .isVisible());
+    i++
+  )
     await page.getByRole("button", { name: "Next step", exact: true }).click();
   await expect(page.locator(".node-parallel")).toHaveCount(2);
   await expect(page.getByText("Next:", { exact: false }).first()).toBeVisible();
@@ -310,4 +322,91 @@ test("detailed outage retains a visible unavailable status", async ({
   await expect(page.locator(".state-blocked")).toContainText(
     "Unavailable / uncertain",
   );
+});
+
+test("scenario focus exposes publisher and notification internals and decision rationale", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Kafka pauses. Orders don’t.", exact: false })
+    .click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await page.getByRole("checkbox", { name: "View 2 · Show internals" }).check();
+  await expect(
+    page.getByRole("button", { name: "Outbox publisher internals" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByRole("button", { name: "Matching internals" }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await page
+    .getByRole("button", { name: "Read the earliest due event", exact: true })
+    .focus();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Implementation choice",
+  );
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", { name: "Delivered. Response lost.", exact: false })
+    .click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Notification worker internals" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  for (
+    let i = 0;
+    i < 30 &&
+    !(await page
+      .getByRole("heading", {
+        name: "Retry with the original key",
+        exact: true,
+      })
+      .isVisible());
+    i++
+  )
+    await page.getByRole("button", { name: "Next step", exact: true }).click();
+  await expect(page.locator('[data-phase="notify-send"]')).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+});
+
+test("scenario buttons invite playback and explain challenge coverage without claiming an official rubric", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.getByText("Choose a scenario to play", { exact: true }),
+  ).toBeVisible();
+  const duplicate = page.getByRole("button", {
+    name: "One order, two requests",
+    exact: false,
+  });
+  await expect(duplicate).toContainText("Run");
+  await duplicate.click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await page.getByText("Challenge & review relevance", { exact: true }).click();
+  await expect(
+    page.getByText("Implementation extension", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("API contract reasoning", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Suggested review signals, not an official scoring rubric.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Price, time & partial fills", exact: false })
+    .click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await page.getByText("Challenge & review relevance", { exact: true }).click();
+  await expect(
+    page.getByText("Explicit challenge behavior", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Algorithm correctness", { exact: true }),
+  ).toBeVisible();
 });

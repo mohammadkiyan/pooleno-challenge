@@ -29,7 +29,11 @@ Open [the scenario viewer](http://127.0.0.1:5173). Click a scenario to start its
 
 The canvas supports scroll-to-zoom, background dragging to pan, and zoom/fit buttons. Focus the canvas for keyboard controls: `+` / `-` zoom, `0` fits, and arrow keys pan. Green identifies current work, dashed blue identifies the next step, and purple identifies explicitly parallel branches. Request paths are solid green; response paths are dashed blue. The compact scenario strip replaces the tall sidebar.
 
+Scenario buttons show play and Run/Replay actions. Below the flow, expand **Challenge & review relevance** for the selected scenario's requirement connection, suggested review signals, design decision, and backend test paths to inspect. These are suggested signals, not an official employer scoring rubric. Request-idempotency cases are explicitly marked as implementation extensions.
+
 **View 1** shows the system overview. Check **View 2 · Show internals** to expand the system diagram into Order API and Matching subflows. Each component can be collapsed independently. A moving marker follows the explanatory internal steps during playback. Hover, keyboard-focus, or tap a step for its description; Escape dismisses it. Switching views preserves playback; the internal phases are authored explanations, not captured backend spans.
+
+View 2 also includes the Outbox publisher and notification worker. Scenario focus opens the relevant component: request handling for duplicate/conflicting requests, matching for price/FIFO cases, publication for Kafka recovery, and delivery for a lost response. The current component opens automatically unless manually overridden. Tooltips distinguish challenge requirements from implementation choices and explain the reason for each approach. Failure branches are labeled separately from the success path.
 
 Each journey starts with a labeled client request. Preconditions identify any orders already resting in the book. The current request, decision, and implementing source path are shown at each step. Both views use that same sequence; the internal diagram has no separate playback clock. Retries explicitly resume at their owner: the client for a repeated order request, the Outbox for publication, or the notification worker for delivery. The committed book stays unchanged during match computation and updates after commit.
 

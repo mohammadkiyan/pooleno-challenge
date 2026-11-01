@@ -51,3 +51,33 @@ describe("request-led walkthroughs", () => {
     ]);
   });
 });
+
+it("explains publication acknowledgement before marking and preserves the failed-send branch", () => {
+  const phases = scenarios[0].frames.map((f) => f.phase);
+  expect(phases.indexOf("publish-read")).toBeLessThan(
+    phases.indexOf("publish-send"),
+  );
+  expect(phases.indexOf("publish-send")).toBeLessThan(
+    phases.indexOf("publish-mark"),
+  );
+  const outage = scenarios
+    .find((s) => s.id === "kafka-outage")!
+    .frames.map((f) => f.phase);
+  expect(outage.indexOf("publish-retry")).toBeLessThan(
+    outage.indexOf("publish-mark"),
+  );
+});
+it("shows a durable notification handoff before delivery and records success after the response", () => {
+  const phases = scenarios
+    .find((s) => s.id === "lost-response")!
+    .frames.map((f) => f.phase);
+  expect(phases.indexOf("notify-inbox")).toBeLessThan(
+    phases.indexOf("notify-send"),
+  );
+  expect(phases.indexOf("notify-retry")).toBeGreaterThan(
+    phases.indexOf("notify-send"),
+  );
+  expect(phases.indexOf("notify-response")).toBeLessThan(
+    phases.indexOf("notify-complete"),
+  );
+});
