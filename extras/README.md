@@ -27,6 +27,15 @@ npm run dev
 
 Open [the scenario viewer](http://127.0.0.1:5173). Click a scenario to start its illustration, or use **Run scenario** for the initially selected one. Pause, resume, move between steps, change playback speed, and replay without backend setup. Reduced-motion preferences are respected.
 
+The **Walkthrough case** selector groups additional edge cases under the six primary scenarios. Choosing a case starts a fresh illustration and resets playback and its coverage notes:
+
+- **Matching:** SELL-taker symmetry, a partially filled taker resting at its limit, and a matching commit followed by crash, restore, and duplicate event redelivery.
+- **Request retries:** 25 concurrent identical requests under one key, with one acceptance and receipt replays.
+- **Validation/conflicts:** excess price precision or zero quantity returning 400 before acceptance writes.
+- **Delivery:** a transient 503 with Retry-After, permanent 400 followed by explicit redrive, and retry-budget exhaustion. The exhaustion example explicitly configures a small two-attempt budget for the illustration; it does not describe the application default.
+
+These cases are authored walkthroughs, not live fault injection. The crash case distinguishes an unavailable RAM cache from durable database records; replay leaves the original trades and restored quantities unchanged. Operator redrive is represented as the existing CLI command, not an invented HTTP endpoint.
+
 The canvas supports scroll-to-zoom, background dragging to pan, and zoom/fit buttons. Focus the canvas for keyboard controls: `+` / `-` zoom, `0` fits, and arrow keys pan. Green identifies current work, dashed blue identifies the next step, and purple identifies explicitly parallel branches. Request paths are solid green; response paths are dashed blue. The compact scenario strip replaces the tall sidebar.
 
 Scenario buttons show play and Run/Replay actions. Below the flow, expand **Challenge & review relevance** for the selected scenario's requirement connection, suggested review signals, design decision, and backend test paths to inspect. These are suggested signals, not an official employer scoring rubric. Request-idempotency cases are explicitly marked as implementation extensions.

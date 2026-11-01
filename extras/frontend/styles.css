@@ -2476,3 +2476,72 @@ button svg {
     grid-column: auto;
   }
 }
+.variant-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid #d8e4dc;
+  border-radius: 7px;
+  background: white;
+  margin: 10px 0 8px;
+  color: #4e6c5b;
+  font-size: 12px;
+}
+.variant-selector label {
+  font-size: 11px;
+  font-weight: 550;
+}
+.variant-selector select {
+  font:
+    12px "DM Sans",
+    sans-serif;
+  padding: 7px 28px 7px 9px;
+  max-width: 100%;
+  border: 1px solid #b9cfc0;
+  border-radius: 5px;
+  color: #365f49;
+  background: #f4f9f6;
+  cursor: pointer;
+}
+.variant-selector > span {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #5d7567;
+  flex: 1;
+  min-width: 170px;
+}
+.book-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 25px 20px;
+  text-align: center;
+  color: #7b653e;
+  background: #fcf8ef;
+}
+.book-unavailable strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.book-unavailable > span {
+  font-size: 12px;
+  line-height: 1.8;
+  max-width: 310px;
+}
+@media (max-width: 650px) {
+  .variant-selector {
+    align-items: stretch;
+    gap: 8px;
+  }
+  .variant-selector select {
+    width: 100%;
+    min-width: 0;
+  }
+  .variant-selector > span {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+}

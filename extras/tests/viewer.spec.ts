@@ -410,3 +410,127 @@ test("scenario buttons invite playback and explain challenge coverage without cl
     page.getByText("Algorithm correctness", { exact: true }),
   ).toBeVisible();
 });
+
+test("important edge cases are selectable without adding primary scenario buttons", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator(".scenario-button")).toHaveCount(6);
+  const variant = page.getByRole("combobox", { name: "Walkthrough case" });
+  await variant.selectOption("sell-taker");
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  const next = page.getByRole("button", { name: "Next step", exact: true });
+  while (await next.isEnabled()) await next.click();
+  await expect(page.locator(".trades")).toContainText("S1");
+  await expect(page.locator(".book-row")).toHaveCount(1);
+  await expect(page.locator(".book-row")).toContainText("B2");
+  await variant.selectOption("crash-replay");
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  while (await next.isEnabled()) await next.click();
+  await expect(page.locator(".facts")).toContainText("3");
+  await expect(page.locator(".trades>div")).toHaveCount(3);
+  await page
+    .getByRole("button", { name: "Same key, different order", exact: false })
+    .click();
+  await variant.selectOption("invalid-precision");
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  while (await next.isEnabled()) await next.click();
+  await expect(page.locator(".facts")).toContainText("0");
+  await expect(
+    page.getByRole("heading", {
+      name: "Reject before acceptance",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+for (const item of [
+  {
+    family: "Price, time & partial fills",
+    id: "partial-taker",
+    expected: "PARTIALLY_FILLED",
+  },
+  {
+    family: "One order, two requests",
+    id: "concurrent-retries",
+    expected: "25",
+  },
+  {
+    family: "Same key, different order",
+    id: "invalid-quantity",
+    expected: "400",
+  },
+  {
+    family: "Delivered. Response lost.",
+    id: "temporary-503",
+    expected: "SUCCEEDED",
+  },
+  {
+    family: "Delivered. Response lost.",
+    id: "permanent-redrive",
+    expected: "SUCCEEDED",
+  },
+  {
+    family: "Delivered. Response lost.",
+    id: "retry-exhaustion",
+    expected: "FAILED",
+  },
+]) {
+  test(`edge walkthrough ${item.id} reaches its described outcome`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/");
+    await page.getByRole("button", { name: item.family, exact: false }).click();
+    await page
+      .getByRole("combobox", { name: "Walkthrough case" })
+      .selectOption(item.id);
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(page.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "1",
+    );
+    const next = page.getByRole("button", { name: "Next step", exact: true });
+    while (await next.isEnabled()) await next.click();
+    await expect(
+      page.getByText("ILLUSTRATION COMPLETE", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator(".facts")).toContainText(item.expected);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("crash walkthrough identifies an unavailable cache before restoring the persisted book", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("combobox", { name: "Walkthrough case" })
+    .selectOption("crash-replay");
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  const next = page.getByRole("button", { name: "Next step", exact: true });
+  for (
+    let i = 0;
+    i < 30 &&
+    !(await page
+      .getByRole("heading", {
+        name: "Crash after the matching commit",
+        exact: true,
+      })
+      .isVisible());
+    i++
+  )
+    await next.click();
+  await expect(
+    page.getByText("Book cache unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".trades>div")).toHaveCount(3);
+  await next.click();
+  await expect(
+    page.getByText("Book cache unavailable", { exact: true }),
+  ).not.toBeVisible();
+  await expect(page.locator(".book-row")).toHaveCount(1);
+  await expect(page.locator(".book-row")).toContainText("S2");
+  await expect(page.locator(".book-row")).toContainText("2.0000");
+});

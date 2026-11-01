@@ -17,6 +17,8 @@ export type PhaseId =
   | "match-fill"
   | "match-save"
   | "match-book"
+  | "match-restore"
+  | "match-replay"
   | "publish-read"
   | "publish-send"
   | "publish-mark"
@@ -33,6 +35,7 @@ export interface BookOrder {
   quantity: string;
 }
 export interface Trade {
+  taker?: string;
   maker: string;
   price: string;
   quantity: string;
@@ -44,6 +47,7 @@ export interface Frame {
   blocked: NodeId[];
   parallel: NodeId[];
   book: BookOrder[];
+  bookState?: "available" | "discarded";
   trades: Trade[];
   facts: [string, string][];
   request: string;
@@ -87,7 +91,7 @@ const trades: Trade[] = [
 ];
 
 // Authoring helpers preserve the last committed state; they do not execute backend logic.
-function next(
+export function next(
   frames: Frame[],
   title: string,
   detail: string,
@@ -112,7 +116,7 @@ function next(
     ...changes,
   });
 }
-function accept(
+export function accept(
   orderId: string,
   side: "BUY" | "SELL",
   price: string,
@@ -194,7 +198,7 @@ function accept(
   );
   return frames;
 }
-function publish(frames: Frame[]) {
+export function publish(frames: Frame[]) {
   next(
     frames,
     "Read the earliest pending event",
@@ -223,7 +227,7 @@ function publish(frames: Frame[]) {
     { phase: "publish-mark" },
   );
 }
-function guard(frames: Frame[]) {
+export function guard(frames: Frame[]) {
   next(
     frames,
     "Dispatch to independent consumer groups",

@@ -45,8 +45,9 @@ const apiStages = [
     id: "api-reply",
     title: "Return the response",
     detail:
-      "A new acceptance returns 202 after commit. An identical retry replays the saved receipt; a conflicting key returns 422 and preserves the original order.",
-    operation: "new → 202 · identical retry → saved receipt · conflict → 422",
+      "Invalid input returns 400 before acceptance. A new acceptance returns 202 after commit. An identical retry replays its saved receipt; a conflicting key returns 422 with the original order unchanged.",
+    operation:
+      "invalid → 400 · new → 202 · replay → saved receipt · conflict → 422",
   },
 ];
 
@@ -88,6 +89,24 @@ const matchingStages = [
   },
 ];
 
+const recoveryStages = [
+  {
+    id: "match-restore",
+    title: "Restore committed state",
+    detail:
+      "After a process failure, discard the old in-memory cache. Rebuild resting orders in acceptance order and restore persisted matching progress before resuming consumption.",
+    operation: "restoreBooks → committed OPEN / PARTIALLY_FILLED rows",
+    branch: true,
+  },
+  {
+    id: "match-replay",
+    title: "Skip the handled event",
+    detail:
+      "A committed result can be redelivered when its Kafka offset was not advanced. Its Inbox entry makes replay a no-op, preserving trades and restored quantities. Then the consumer may advance the offset.",
+    operation: "handled Inbox event → no new match → offset",
+    branch: true,
+  },
+];
 type GroupId = "api" | "match" | "publish" | "notify";
 const owners: Record<GroupId, NodeId> = {
   api: "api",
@@ -336,12 +355,14 @@ function Chip({
 
 export function InternalFlow({
   scenarioId,
+  recovery = false,
   frame,
   next,
   playing,
   speed,
 }: {
   scenarioId: string;
+  recovery?: boolean;
   frame: Frame;
   next?: Frame;
   playing: boolean;
@@ -506,7 +527,7 @@ export function InternalFlow({
             "Matching",
             "match",
             ArrowDownUp,
-            matchingStages,
+            recovery ? [...matchingStages, ...recoveryStages] : matchingStages,
             isOpen("match"),
             () => toggleGroup("match"),
           )}

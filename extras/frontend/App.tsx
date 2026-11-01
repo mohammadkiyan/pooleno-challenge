@@ -35,6 +35,7 @@ import { initialPlayback, playbackReducer } from "./playback";
 import { FlowCanvas } from "./FlowCanvas";
 import { nodeState } from "./flow-state";
 import { InternalFlow } from "./InternalFlow";
+import { walkthroughVariants } from "./walkthrough-variants";
 import { scenarioCoverage } from "./scenario-coverage";
 import { firstScenario, scenarios } from "./scenarios";
 import type { BookOrder, Frame, NodeId } from "./scenarios";
@@ -376,13 +377,19 @@ function BookSide({
 
 export function App() {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [variantId, setVariantId] = useState("");
   const [playback, dispatch] = useReducer(playbackReducer, initialPlayback);
   const [speed, setSpeed] = useState(1);
   const [showInternals, setShowInternals] = useState(false);
   const [tab, setTab] = useState<"explanation" | "request">("explanation");
   const reducedMotion = useReducedMotion();
-  const scenario = scenarios[selectedIndex] ?? firstScenario;
-  const coverage = scenarioCoverage[scenario.id];
+  const family = scenarios[selectedIndex] ?? firstScenario;
+  const variants = walkthroughVariants[family.id] ?? [];
+  const variant = variants.find((item) => item.id === variantId);
+  const scenario = variant
+    ? { ...family, ...variant, id: family.id, title: family.title }
+    : family;
+  const coverage = variant?.coverage ?? scenarioCoverage[family.id];
   const frame = scenario.frames[playback.frame];
   if (!frame) throw new Error("The selected scenario frame is missing");
   const total = scenario.frames.length;
@@ -397,10 +404,11 @@ export function App() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [playing, playback.frame, speed, total]);
+  }, [playing, playback.frame, speed, total, selectedIndex, variantId]);
 
   function selectScenario(index: number) {
     setSelectedIndex(index);
+    setVariantId("");
     setTab("explanation");
     dispatch({ type: "run" });
   }
@@ -510,7 +518,7 @@ export function App() {
                   SCENARIO {String(selectedIndex + 1).padStart(2, "0")}{" "}
                   <span>/ 06</span>
                 </div>
-                <h2 id="scenario-title">{scenario.title}</h2>
+                <h2 id="scenario-title">{variant?.label ?? scenario.title}</h2>
               </div>
               <button
                 type="button"
@@ -534,6 +542,32 @@ export function App() {
               </button>
             </section>
 
+            {variants.length > 0 && (
+              <div className="variant-selector">
+                <label htmlFor="walkthrough-case">Walkthrough case</label>
+                <select
+                  id="walkthrough-case"
+                  value={variantId}
+                  onChange={(event) => {
+                    setVariantId(event.target.value);
+                    setTab("explanation");
+                    dispatch({ type: "run" });
+                  }}
+                >
+                  <option value="">Primary walkthrough</option>
+                  {variants.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+                <span>
+                  {variant
+                    ? variant.description
+                    : "Choose an edge case to play"}
+                </span>
+              </div>
+            )}
             <div className="preview-note">
               <Info size={15} />
               <span>
@@ -605,7 +639,8 @@ export function App() {
               <FlowCanvas>
                 {showInternals ? (
                   <InternalFlow
-                    key={scenario.id}
+                    key={scenario.id + variantId}
+                    recovery={variantId === "crash-replay"}
                     scenarioId={scenario.id}
                     frame={frame}
                     next={scenario.frames[playback.frame + 1]}
@@ -691,7 +726,10 @@ export function App() {
             </section>
 
             {coverage && (
-              <details key={scenario.id} className="scenario-coverage">
+              <details
+                key={scenario.id + variantId}
+                className="scenario-coverage"
+              >
                 <summary>
                   <ShieldCheck size={16} />
                   <strong>Challenge & review relevance</strong>
@@ -870,21 +908,38 @@ export function App() {
                   <span>Size · ETH</span>
                   <span>Order</span>
                 </div>
-                <BookSide
-                  orders={frame.book.filter((order) => order.side === "SELL")}
-                  side="SELL"
-                  animate={!reducedMotion}
-                />
-                <div className="book-separator">
-                  <span />
-                  Best price, then arrival order
-                  <span />
-                </div>
-                <BookSide
-                  orders={frame.book.filter((order) => order.side === "BUY")}
-                  side="BUY"
-                  animate={!reducedMotion}
-                />
+                {frame.bookState === "discarded" ? (
+                  <div className="book-unavailable">
+                    <Database size={19} />
+                    <strong>Book cache unavailable</strong>
+                    <span>
+                      The process has stopped. Committed orders and trades
+                      remain in PostgreSQL; the cache must be restored.
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <BookSide
+                      orders={frame.book.filter(
+                        (order) => order.side === "SELL",
+                      )}
+                      side="SELL"
+                      animate={!reducedMotion}
+                    />
+                    <div className="book-separator">
+                      <span />
+                      Best price, then arrival order
+                      <span />
+                    </div>
+                    <BookSide
+                      orders={frame.book.filter(
+                        (order) => order.side === "BUY",
+                      )}
+                      side="BUY"
+                      animate={!reducedMotion}
+                    />
+                  </>
+                )}
                 <div className="trade-heading">
                   <span>Executions</span>
                   <span>{frame.trades.length} trades</span>
@@ -906,7 +961,7 @@ export function App() {
                         <span>
                           {trade.maker}
                           <ArrowRight size={12} />
-                          B1
+                          {trade.taker ?? "B1"}
                         </span>
                         <strong>
                           {trade.quantity} <span>ETH</span>
