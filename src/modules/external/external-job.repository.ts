@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { toStoredError } from '../../infrastructure/stored-error.js';
+import type { OrderAcceptedV1 } from '../messaging/order-accepted.schema.js';
 
 export interface DueJob {
   eventId: string;
@@ -37,16 +38,8 @@ export async function findDueJobs(pool: Pool, limit: number): Promise<DueJob[]> 
     target_key: string;
     payload: string;
     attempts: number;
-    request_id: string | null;
-    order_id: string | null;
-    symbol: string | null;
-    acceptance_sequence: string | null;
   }>(
-    `SELECT event_id, target_key, payload::text AS payload, attempts,
-            payload->>'correlationId' AS request_id,
-            payload->>'orderId' AS order_id,
-            payload->>'symbol' AS symbol,
-            payload->>'acceptanceSequence' AS acceptance_sequence
+    `SELECT event_id, target_key, payload::text AS payload, attempts
        FROM external_jobs
       WHERE status = 'PENDING' AND next_attempt_at <= now()
       ORDER BY next_attempt_at, event_id
@@ -54,18 +47,23 @@ export async function findDueJobs(pool: Pool, limit: number): Promise<DueJob[]> 
     [limit],
   );
 
-  return rows.map((row) => ({
-    eventId: row.event_id,
-    targetKey: row.target_key,
-    payload: row.payload,
-    attempts: row.attempts,
-    logContext: {
-      requestId: row.request_id,
-      orderId: row.order_id,
-      symbol: row.symbol,
-      acceptanceSequence: row.acceptance_sequence,
-    },
-  }));
+  return rows.map((row) => {
+    // Read here, not with `->>`. That fails on `\u0000` anywhere in a value, even under a
+    // duplicate key that the schema check never sees, and it would fail this whole query.
+    const event = JSON.parse(row.payload) as Partial<OrderAcceptedV1> | null;
+    return {
+      eventId: row.event_id,
+      targetKey: row.target_key,
+      payload: row.payload,
+      attempts: row.attempts,
+      logContext: {
+        requestId: event?.correlationId ?? null,
+        orderId: event?.orderId ?? null,
+        symbol: event?.symbol ?? null,
+        acceptanceSequence: event?.acceptanceSequence ?? null,
+      },
+    };
+  });
 }
 
 /*

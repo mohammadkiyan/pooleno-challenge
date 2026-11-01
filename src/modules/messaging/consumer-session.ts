@@ -121,7 +121,11 @@ export async function runConsumerSession(options: ConsumerSessionOptions): Promi
       heartbeatInterval: Math.floor(sessionTimeoutMs / 3),
     });
 
-    closeStream = () => void stream.close();
+    closeStream = () => {
+      stream.close().catch((error: unknown) => {
+        log.warn({ err: error }, 'closing the kafka stream failed');
+      });
+    };
     // After this the partitions may belong to another member, so this session must end
     // without committing. The next one starts from durable state and rejoins the group.
     const stopOnMembershipChange = (): void => {

@@ -113,7 +113,7 @@ Only then is the match applied to the book, and only then is the offset committe
 
 ## Decision: unreadable messages
 
-A message that fails `parseOrderAccepted` can never succeed, so retrying it would only stop its partition. Matching saves it to the `quarantine` dead-letter table and then advances the offset. If that write fails, the partition holds until it succeeds. Only parse failures are treated this way: a database failure on a valid event is retried, because that event is a real order.
+A message that fails `parseOrderAccepted` can never succeed, so retrying it would only stop its partition. Matching saves it to the `quarantine` dead-letter table and then advances the offset. If that write fails, the partition holds until it succeeds. Only parse failures are treated this way: a database failure on a valid event is retried, because that event is a real order. So the schema must refuse every value PostgreSQL would refuse, such as a NUL in a string or an amount wider than its column, or one bad message would hold its partition as a database failure.
 
 - **A real order cannot be silently lost:** if a damaged message was an accepted order, the next valid event for that symbol hits the sequence guard, and the symbol holds until the [lost-event procedure](../operations.md#lost-or-missing-events) sends the order again from the Outbox.
 - **What has no next event to trip the guard:** a damaged order that is its symbol's latest, or every event of a future `schemaVersion` published before matching is upgraded. These orders stay `QUEUED`, and `matching.lag` and `matching.quarantined` in `GET /ops/backlog` show them. The same procedure recovers them. Upgrade matching before the publisher.

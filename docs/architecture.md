@@ -81,7 +81,7 @@ The local Inbox can't close the gap between a remote success and its local recor
 | Matching event fails | Only its partition is held. The role restores that book, waits 1 s and retries without committing | None. It retries until the failure clears or an operator acts |
 | Kafka session fails at a consumer | Every book is discarded. The role waits 1 s, restores and rejoins | None |
 | Sequence gap at matching | Holds its partition with an error, because later orders depend on the missing one | Needs the [lost-event procedure](operations.md#lost-or-missing-events) |
-| Malformed message at a consumer | Saved to the `quarantine` dead-letter table, then skipped. If it was a real order, the sequence guard stops its symbol at the next event | Inspected under [Repairs](operations.md#inspect-failed-jobs-and-quarantined-messages) |
+| Malformed message at a consumer, including a value PostgreSQL couldn't read back | Saved to the `quarantine` dead-letter table, then skipped. If it was a real order, the sequence guard stops its symbol at the next event | Inspected under [Repairs](operations.md#inspect-failed-jobs-and-quarantined-messages) |
 | Destination fails transiently | The job retries with jitter and honours `Retry-After`. The delay doubles from 1 s to 5 min | 400 attempts, about a day, then `FAILED` |
 | Destination rejects permanently | The job is `FAILED` at once | Needs a [redrive](operations.md#redrive-failed-jobs) under the same key |
 
@@ -122,7 +122,7 @@ In one local run on a 12-core machine, the API accepted about 460 orders per sec
 
 This project has no manifests. It is built to run under Kubernetes as follows.
 
-**Graceful shutdown.** On `SIGTERM` or `SIGINT`, a role reports not ready, stops taking new work, finishes what is in flight, commits offsets only for completed work, leaves its group, releases its lock and exits with status 0. `SHUTDOWN_TIMEOUT_MS`, 8 s by default, bounds all of this. Past the deadline it exits with status 1, and a second signal ends it at once. Both are safe, because a forced exit is the same as a crash and durable records drive replay. Measured with `docker compose stop`: 0.3 s with status 0 with healthy dependencies, and 8.3 s with status 1 for a consumer whose broker hung.
+**Graceful shutdown.** On `SIGTERM` or `SIGINT`, a role reports not ready, stops taking new work, finishes what is in flight, commits offsets only for completed work, leaves its group, releases its lock and exits with status 0. `SHUTDOWN_TIMEOUT_MS`, 8 s by default, bounds all of this. Past the deadline it exits with status 1, and a second signal ends it at once. Both are safe, because a forced exit is the same as a crash and durable records drive replay. Measured with `docker compose stop`: 0.3 s with status 0 with healthy dependencies, and 8.3 s with status 1 for a consumer whose broker hung. A worker role that stops with no signal, because it failed or lost ownership, is bounded by the same deadline.
 
 **Health checks.** Liveness reports that the process runs and never looks at a dependency, so an outage doesn't cause a restart loop. Readiness reports whether the role can do its work now.
 

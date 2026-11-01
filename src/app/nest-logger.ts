@@ -32,6 +32,9 @@ export class NestLogger implements LoggerService {
   private write(level: Level, message: unknown, details: unknown[]): void {
     if (message instanceof Error) {
       this.logger[level]({ err: message, nest: details }, message.message);
+    } else if (typeof message === 'object' && message !== null) {
+      // Nest passes any value through, and String() would log it as '[object Object]'.
+      this.logger[level]({ nest: [message, ...details] }, 'nest message');
     } else {
       this.logger[level]({ nest: details }, String(message));
     }

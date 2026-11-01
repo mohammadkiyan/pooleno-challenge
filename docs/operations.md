@@ -210,6 +210,8 @@ If Kafka's data is gone altogether, run `docker compose run --rm kafka-init` bef
 
 `docker compose stop` sends `SIGTERM`. A role drains and exits with status 0, normally within a second. Past `SHUTDOWN_TIMEOUT_MS` it exits with status 1, which is safe because durable records drive replay. A second signal ends it at once.
 
+A worker role also stops by itself when it fails or loses its lock, within the same limit. It logs `shutdown deadline passed; exiting` if it had to be forced. Its supervisor restarts it, and it then competes for the lock again.
+
 `./review.sh down` removes the stack and all its data. `docker compose down` removes the containers and keeps the data.
 
 After a failed port bind, run `docker compose down` and then `up`, because a plain rerun of `up` starts the leftover container with no network.
@@ -261,7 +263,7 @@ Every published port is bound to loopback. If one is taken, set its variable for
 |---|---|---|---|
 | `DATABASE_URL` | API, publisher, matching, external, `migrate`, `external:redrive` | PostgreSQL connection string | Required |
 | `LOG_LEVEL` | All | pino log level | `info` |
-| `SHUTDOWN_TIMEOUT_MS` | API, publisher, matching, external | Longest wait for work in flight after a signal. Keep it below the supervisor's grace period | `8000` |
+| `SHUTDOWN_TIMEOUT_MS` | API, publisher, matching, external | Longest wait for work in flight after a signal, a role failure or lost ownership. Keep it below the supervisor's grace period | `8000` |
 | `HEALTH_HOST` | Publisher, matching, external | Listen address of the health server | `127.0.0.1` |
 | `HEALTH_PORT` | Publisher, matching, external | Health port; `0` picks a free one | `8081`, `8082`, `8083` |
 | `HOST` | API | Listen address | `127.0.0.1` |
@@ -280,7 +282,7 @@ Every published port is bound to loopback. If one is taken, set its variable for
 | `EXTERNAL_GROUP_ID` | API (only to report lag), external | Kafka consumer group | `external-notification-v1` |
 | `EXTERNAL_SESSION_TIMEOUT_MS` | External | Kafka session timeout, at least 6000 | `10000` |
 | `EXTERNAL_RESTART_DELAY_MS` | External | Pause after a failed session or delivery pass | `1000` |
-| `EXTERNAL_API_URL` | External | Where notifications go, as an absolute URL | `http://127.0.0.1:18080/v1/notifications` |
+| `EXTERNAL_API_URL` | External | Where notifications go, as an absolute `http` or `https` URL | `http://127.0.0.1:18080/v1/notifications` |
 | `EXTERNAL_TIMEOUT_MS` | External | Limit on one attempt | `5000` |
 | `EXTERNAL_POLL_INTERVAL_MS` | External | Pause when no job is due | `500` |
 | `EXTERNAL_RETRY_BASE_MS` | External | Delay after the first failed attempt, doubling on each attempt | `1000` |

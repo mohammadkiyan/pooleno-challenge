@@ -8,7 +8,10 @@ import {
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ApiError } from './api-error.js';
 
-/** The only place an error becomes a response, so every failure has the same shape. */
+/**
+ * Gives every failure that reaches Nest the same shape. Fastify still answers what it rejects
+ * before routing, such as a malformed URL, as ADR 0005 explains.
+ */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {

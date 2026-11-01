@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { toStoredError } from '../../infrastructure/stored-error.js';
 import type { OrderAcceptedV1 } from './order-accepted.schema.js';
 
 export interface OutboxHead {
@@ -12,8 +13,6 @@ export interface OutboxHead {
   payload: string;
   attempts: number;
 }
-
-const MAX_STORED_ERROR_LENGTH = 500;
 
 export async function insertOutboxEvent(tx: PoolClient, event: OrderAcceptedV1): Promise<void> {
   await tx.query(
@@ -89,6 +88,6 @@ export async function recordSendFailure(
             last_error = $2,
             next_attempt_at = now() + $3 * interval '1 millisecond'
       WHERE event_id = $1`,
-    [eventId, error.slice(0, MAX_STORED_ERROR_LENGTH), retryAfterMs],
+    [eventId, toStoredError(error), retryAfterMs],
   );
 }

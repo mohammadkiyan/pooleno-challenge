@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -505,6 +506,21 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
       ]);
       expect(quarantined.every((row) => row.topic === stream.kafka.topic)).toBe(true);
       expect(quarantined.every((row) => row.error.length > 0)).toBe(true);
+    });
+
+    it('quarantines a value PostgreSQL could not read back, and keeps delivering', async () => {
+      await startMockApi(mock);
+      const event = await acceptEvent(pool, SELL);
+      const key = event.symbol;
+      const poisoned = JSON.stringify({ ...event, eventId: randomUUID(), symbol: 'BTC\0USD' });
+      await produceRaw(stream, [{ key, value: poisoned }, { key, value: JSON.stringify(event) }]);
+
+      const external = startExternal();
+
+      await waitForJob(event.eventId, { status: 'SUCCEEDED' });
+      expect(await countJobs(pool)).toBe(1);
+      expect(external.countLogs('notification pass failed; resuming from durable state')).toBe(0);
+      expect((await readQuarantine(pool)).map((row) => row.raw_value.toString())).toEqual([poisoned]);
     });
 
     it('does not move past one until it is durably recorded', async () => {

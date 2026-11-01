@@ -53,24 +53,39 @@ async function recordOutcome(
   const attempts = job.attempts + 1;
   const context = { ...job.logContext, eventId: job.eventId, attempts };
   let recorded: boolean;
+  let report: () => void;
 
   if (outcome.kind === 'delivered') {
     recorded = await markJobSucceeded(pool, job);
-    log.info(context, 'notification delivered');
+    report = () => {
+      log.info(context, 'notification delivered');
+    };
   } else if (outcome.kind === 'permanent') {
     recorded = await markJobFailed(pool, job, outcome.error);
-    log.error({ ...context, error: outcome.error }, 'notification rejected; job failed');
+    report = () => {
+      log.error({ ...context, error: outcome.error }, 'notification rejected; job failed');
+    };
   } else if (attempts >= retry.maxAttempts) {
     recorded = await markJobFailed(pool, job, outcome.error);
-    log.error({ ...context, error: outcome.error }, 'retries exhausted; job failed');
+    report = () => {
+      log.error({ ...context, error: outcome.error }, 'retries exhausted; job failed');
+    };
   } else {
     const retryDelayMs = computeRetryDelayMs(attempts, retry, outcome.retryAfterMs);
     recorded = await scheduleJobRetry(pool, job, { error: outcome.error, retryDelayMs });
-    log.warn({ ...context, error: outcome.error, retryDelayMs }, 'delivery failed; will retry');
+    report = () => {
+      log.warn({ ...context, error: outcome.error, retryDelayMs }, 'delivery failed; will retry');
+    };
   }
 
-  if (!recorded) {
-    log.warn(context, 'job changed during the attempt; its result was not recorded');
+  // A result that was not applied must not read as what happened to the job.
+  if (recorded) {
+    report();
+  } else {
+    log.warn(
+      { ...context, outcome: outcome.kind },
+      'job changed during the attempt; its result was not recorded',
+    );
   }
 }
 

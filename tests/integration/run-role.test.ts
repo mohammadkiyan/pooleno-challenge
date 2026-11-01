@@ -21,6 +21,7 @@ function ownershipRecording(): { ownership: Ownership; readiness: () => Promise<
       reportReadiness: (next) => {
         check = next;
       },
+      stopping: () => undefined,
     },
     readiness: () => check(),
   };
@@ -97,6 +98,23 @@ describe('runRole', () => {
     await expect(run(ownership)).rejects.toThrow('role failed');
 
     expect(StubRole.seenPool?.ended).toBe(true);
+  });
+
+  it('starts the deadline before closing anything when the role fails with no signal', async () => {
+    const stopping = vi.fn<() => void>();
+    const { ownership } = ownershipRecording();
+    let end: { mock: { invocationCallOrder: number[] } } | undefined;
+    StubRole.body = (pool) => {
+      end = vi.spyOn(pool, 'end');
+      return Promise.reject(new Error('role failed'));
+    };
+
+    await expect(run({ ...ownership, stopping })).rejects.toThrow('role failed');
+
+    expect(stopping).toHaveBeenCalledOnce();
+    expect(stopping.mock.invocationCallOrder[0]).toBeLessThan(
+      end?.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it('exits non-zero when a resource fails to close', async () => {

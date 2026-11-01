@@ -34,6 +34,8 @@ export async function runRole({ module, role, log, ownership }: RunRoleOptions):
   try {
     await app.get(role).run();
   } finally {
+    // A role can fail with no signal, which would leave a hung close with no deadline.
+    ownership.stopping();
     await app.close();
   }
 }

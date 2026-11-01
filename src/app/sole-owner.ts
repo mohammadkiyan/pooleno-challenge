@@ -6,7 +6,7 @@ import {
   type HealthAddress,
   type ReadinessCheck,
 } from './health-server.js';
-import { shutdownSignal } from './lifecycle.js';
+import { exitAtDeadline, shutdownSignal } from './lifecycle.js';
 
 export interface Ownership {
   /** Aborts on shutdown and when ownership is lost. The role must then stop and return. */
@@ -14,6 +14,8 @@ export interface Ownership {
   assertHeld: () => Promise<void>;
   /** Adds what this role needs, beyond ownership, to be reported as ready. */
   reportReadiness: (check: ReadinessCheck) => void;
+  /** Starts the shutdown deadline. Call before closing anything, because a close can hang. */
+  stopping: () => void;
 }
 
 export interface SoleOwnerOptions {
@@ -30,6 +32,10 @@ export interface SoleOwnerOptions {
  * returned, so a successor starts after this process has stopped working. Losing
  * ownership or failing exits non-zero, so a supervisor can start a fresh process.
  *
+ * Stopping for any reason is bounded by the same deadline as a signal. The timer outlives this
+ * function, because a connection that has gone quiet can keep the process alive after it, and
+ * with it the lock, which PostgreSQL frees only when that connection ends.
+ *
  * A standby and a role shutting down are alive but not ready. Asking the lock's connection
  * for an answer also proves that PostgreSQL is reachable.
  */
@@ -38,7 +44,16 @@ export async function runAsSoleOwner(
   role: (ownership: Ownership) => Promise<void>,
 ): Promise<void> {
   const { databaseUrl, lockId, log, shutdownTimeoutMs, health } = options;
-  const shutdown = shutdownSignal({ log, deadlineMs: shutdownTimeoutMs });
+  const deadline = { log, deadlineMs: shutdownTimeoutMs };
+  const shutdown = shutdownSignal(deadline);
+
+  let stopStarted = false;
+  const stopping = (): void => {
+    if (!stopStarted) {
+      stopStarted = true;
+      exitAtDeadline(deadline);
+    }
+  };
 
   let lock: SessionLock | undefined;
   let roleCheck: ReadinessCheck = () => Promise.resolve(undefined);
@@ -64,6 +79,7 @@ export async function runAsSoleOwner(
       if (!lock) {
         return;
       }
+      lock.lost.addEventListener('abort', stopping, { once: true });
 
       try {
         log.info('acquired ownership');
@@ -73,14 +89,17 @@ export async function runAsSoleOwner(
           reportReadiness: (check) => {
             roleCheck = check;
           },
+          stopping,
         });
         if (lock.lost.aborted) {
           throw new Error('Ownership was lost', { cause: lock.lost.reason });
         }
       } finally {
+        stopping();
         await lock.release();
       }
     } finally {
+      stopping();
       await closeHealthServer(server);
     }
   } catch (error) {

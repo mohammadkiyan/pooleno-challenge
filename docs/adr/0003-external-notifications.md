@@ -71,8 +71,10 @@ No result touches the order. The role never writes to `orders`, so infrastructur
 
 ## Decision: malformed events
 
-**Policy:** a message that fails `parseOrderAccepted` is written to `quarantine`, the system's dead-letter table, with its consumer, topic, partition, offset, raw value and error, and only then does the offset advance. If that write fails, the offset holds and the session restarts. This covers invalid JSON, a tombstone, a wrong shape and a future `schemaVersion`.
+**Policy:** a message that fails `parseOrderAccepted` is written to `quarantine`, the system's dead-letter table, with its consumer, topic, partition, offset, raw value and error, and only then does the offset advance. If that write fails, the offset holds and the session restarts. This covers invalid JSON, a tombstone, a wrong shape, a future `schemaVersion` and a value PostgreSQL couldn't read back, such as a NUL in a string.
 
+- **Why text fields are allow-lists:** a `json` column stores `\u0000` and a lone surrogate, but `->>` then fails on that document, so one such row would stop every delivery. The schema refuses them on the way in.
+- **Why the worker reads its log context in JavaScript:** a job stores the Kafka value byte for byte, and a duplicate key can hide a bad value from the schema. Reading the job as text means one row can't stop the others, whatever it holds.
 - **Why not block:** notifications do not depend on each other, so blocking would hold back good notifications and protect nothing.
 - **Why a table, not a Kafka topic:** PostgreSQL is already a dependency, and a dead-letter topic would need its own producer and failure handling for the same result.
 - **Matching uses the same policy:** the groups keep separate offsets, so each records the message under its own consumer name. See [ADR 0002](0002-messaging-and-matching.md#decision-unreadable-messages).

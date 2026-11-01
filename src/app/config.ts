@@ -183,9 +183,11 @@ function readDatabaseUrl(env: NodeJS.ProcessEnv): string {
 /** Checked at startup, because a bad URL would otherwise look like an outage for days. */
 function readTargetUrl(env: NodeJS.ProcessEnv): string {
   const url = env.EXTERNAL_API_URL ?? 'http://127.0.0.1:18080/v1/notifications';
-  if (!URL.canParse(url)) {
+  // 'localhost:18080/x' parses too, with 'localhost:' as its scheme, and fetch can never call it.
+  const protocol = URL.canParse(url) ? new URL(url).protocol : undefined;
+  if (protocol !== 'http:' && protocol !== 'https:') {
     // The value is left out, because a URL can carry credentials and this reaches the logs.
-    throw new Error('EXTERNAL_API_URL must be an absolute URL');
+    throw new Error('EXTERNAL_API_URL must be an absolute http or https URL');
   }
   return url;
 }
@@ -200,8 +202,9 @@ function readInteger(
     return fallback;
   }
 
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < min || value > max) {
+  // Number() alone reads '' as 0 and '1e3' as 1000, so a blank setting would pass as a real one.
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
     const range = max === Infinity ? `of at least ${min}` : `from ${min} to ${max}`;
     throw new Error(`${name} must be an integer ${range}, got "${raw}"`);
   }

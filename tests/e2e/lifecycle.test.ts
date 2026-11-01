@@ -16,11 +16,13 @@ import {
   RoleProcess,
   startApi,
 } from '../support/processes.js';
+import { startStallingProxy, type StallingProxy } from '../support/stalling-proxy.js';
 import {
   readOrder,
   readTrades,
   resetDatabase,
   TEST_DATABASE_URL,
+  terminateAdvisoryLockHolders,
   waitForBlockedBackend,
 } from '../support/test-database.js';
 
@@ -235,6 +237,75 @@ describe('graceful shutdown', { timeout: 120_000 }, () => {
     const { orderId } = (await answer.json()) as AcceptedBody;
     expect(await readOrder(pool, orderId)).toMatchObject({ status: 'QUEUED' });
     expect(await exit).toEqual(CLEAN_EXIT);
+  });
+});
+
+describe('stopping with no signal', { timeout: 120_000 }, () => {
+  let proxy: StallingProxy;
+
+  beforeEach(async () => {
+    proxy = await startStallingProxy(TEST_DATABASE_URL);
+  });
+
+  afterEach(async () => {
+    await killAllRoles();
+    await proxy.close();
+  });
+
+  async function expectSuccessorToAcquire(): Promise<void> {
+    await startRole('publisher').waitForLog('acquired ownership');
+  }
+
+  it('ends a standby whose connection goes quiet, and its lock reaches a successor', async () => {
+    const owner = startRole('publisher');
+    await owner.waitForLog('acquired ownership');
+    const standby = startRole('publisher', { DATABASE_URL: proxy.url });
+    await standby.waitForLog('another process owns this role; waiting');
+
+    // Its next attempt still takes the lock on the server. Only the answer is lost.
+    proxy.stall('replies');
+    await owner.kill();
+
+    expect(await standby.exited).toEqual({ code: 1, signal: null });
+    await expectSuccessorToAcquire();
+  });
+
+  it('ends an owner at the deadline when quiet sockets would keep it alive', async () => {
+    const owner = startRole('publisher', {
+      DATABASE_URL: proxy.url,
+      SHUTDOWN_TIMEOUT_MS: SHORT_DEADLINE_MS,
+      OUTBOX_POLL_INTERVAL_MS: '2000',
+    });
+    await owner.waitForLog('acquired ownership');
+
+    // The pool's idle connection is what closes slowly, so it must be open, and the role must be
+    // pausing between passes. A pass caught mid-query waits on, and never checks the lock again.
+    await vi.waitFor(
+      () => {
+        expect(proxy.connections()).toBeGreaterThanOrEqual(2);
+        expect(proxy.quietForMs()).toBeGreaterThan(200);
+      },
+      { timeout: 30_000, interval: 50 },
+    );
+    proxy.stall();
+
+    expect(await owner.exited).toEqual({ code: 1, signal: null });
+    expect(owner.countLogs('shutdown deadline passed; exiting')).toBe(1);
+
+    await proxy.close();
+    await expectSuccessorToAcquire();
+  });
+
+  it('bounds the drain after ownership is lost, while work is still parked', async () => {
+    const { matcher, holder } = await parkMatcherInTransaction({
+      SHUTDOWN_TIMEOUT_MS: SHORT_DEADLINE_MS,
+    });
+
+    await terminateAdvisoryLockHolders(pool);
+
+    expect(await matcher.exited).toEqual({ code: 1, signal: null });
+    expect(matcher.countLogs('shutdown deadline passed; exiting')).toBe(1);
+    await releaseRow(holder);
   });
 });
 

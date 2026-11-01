@@ -55,6 +55,8 @@ Each worker role runs as `runAsSoleOwner(..., (ownership) => runRole(...))`. The
 4. `app.close()` closes the pool, and the publisher's producer, in `onApplicationShutdown`. Consumers have already closed themselves when their loops ended.
 5. The lock is released, so a successor starts only after all of this has stopped.
 
+`ownership.stopping()` runs before step 4, because a role can fail with no signal, and a close that hangs would then have no deadline.
+
 Keeping the lock outside the context is what preserves the guarantee: if it were a provider, its release would depend on the order Nest closes things in, and a successor could start while the old role still had resources open.
 
 Resources close in `onApplicationShutdown` because it runs last: for the API that is after the HTTP server has drained, so a request in flight still has its pool.

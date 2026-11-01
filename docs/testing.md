@@ -94,6 +94,7 @@ Each table lists a failure, how it is produced, and what the test proves.
 | `SIGTERM` during a transaction | The test holds the progress row, then sends `SIGTERM` and releases it | The transaction finishes, the exit is clean, no offset passes durable work, and the restart is a no-op |
 | Rebalance during a transaction | A rival consumer joins the group while the transaction is parked | No offset is committed afterwards, and the redelivery is a no-op |
 | Malformed message | The test produces one directly to the topic | It is quarantined, and the orders behind it on its partition still trade |
+| Value PostgreSQL would refuse | A copy of an event with a NUL in its symbol, between two real orders | It is quarantined before any write, the orders trade, and the partition isn't held |
 | Quarantine write fails | A database trigger raises on the insert | The partition holds until the message is recorded |
 | Damaged real order | The test produces a truncated event, with a valid one behind it | It is quarantined, and the sequence guard then holds its symbol rather than skip the order |
 | Blocked database write | The test holds BTC's progress row | ETH on another partition finishes while BTC waits, and BTC then completes in order |
@@ -117,7 +118,10 @@ Each table lists a failure, how it is produced, and what the test proves.
 | `SIGTERM` or a rebalance during the handoff | The test holds the Inbox row, then signals or joins the group | The transaction finishes, and no offset passes durable work |
 | Database failure in the handoff | A database trigger raises on the insert | The offset holds until the job is stored |
 | Malformed message | Invalid JSON, a wrong shape and a tombstone on the topic | Each is quarantined, then the valid event behind them is delivered |
+| Value PostgreSQL would refuse | A copy of an event with a NUL in its symbol | It is quarantined with no job, and the valid event behind it is delivered |
+| Stored job PostgreSQL can't read values from | Rows with a NUL, a lone surrogate, and a NUL under a duplicate key | Every due job is still attempted, with its log context |
 | Quarantine write fails | A database trigger raises on the insert | The offset holds until the message is recorded |
+| Result arrives after the job changed | The job's attempts move during the call | Nothing claims the outcome, and a warning says it went unrecorded |
 | `Retry-After` | The mock answers 503 with the header | The next attempt waits at least that long, up to the cap |
 | Conflicting body | A different body under the same key | `422`, a `FAILED` job, and the earlier effect is untouched |
 | Permanent status | The mock answers 400 | The job is `FAILED` at once, and the redrive command delivers it under the same key |
@@ -129,6 +133,7 @@ Each table lists a failure, how it is produced, and what the test proves.
 |---|---|---|
 | Second process started | A real second publisher, matcher or external role | It waits, does nothing, and takes over after `SIGKILL` of the owner |
 | Ownership connection lost | `pg_terminate_backend` on the lock's connection | The role stops and exits with status 1 |
+| Answer to a lock attempt lost | A proxy drops replies, so the attempt runs on the server and takes the lock | The attempt times out, its connection is dropped, and a successor gets the lock |
 
 ### Lifecycle, health and visibility
 
@@ -136,6 +141,10 @@ Each table lists a failure, how it is produced, and what the test proves.
 |---|---|---|
 | `SIGTERM` during work | The test parks a transaction, then signals the role | Readiness turns false while liveness still answers, and the work finishes |
 | Work outlasts the deadline | A transaction stays parked past `SHUTDOWN_TIMEOUT_MS` | Exit status 1 at the deadline, and the abandoned work is replayed once |
+| Standby's connection goes quiet | A proxy drops replies while the standby waits for the lock | Exit status 1, and a successor takes the lock |
+| Owner's connection goes quiet | A proxy swallows everything, so closing can't finish | Exit status 1 at the deadline, and a successor takes the lock |
+| Lost ownership with work parked | The lock's connection is terminated during a parked transaction | Exit status 1 at the deadline |
+| Role fails with no signal | A role body that rejects | The deadline starts before anything closes |
 | Second signal | Two signals during a stuck shutdown | The role exits at once |
 | `SIGTERM` while joining a group | The role is signalled during a join | The deadline bounds it |
 | API request in flight | The test parks a request, then signals the API | That request finishes, and new connections are refused |

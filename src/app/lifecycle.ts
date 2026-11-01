@@ -7,24 +7,30 @@ export interface ShutdownOptions {
 }
 
 /**
+ * Ends the process at the deadline if it is still running then. Unreferenced, so that it never
+ * keeps alive a process that has finished, though it still fires while something else does,
+ * such as a socket that has gone quiet.
+ */
+export function exitAtDeadline({ log, deadlineMs }: ShutdownOptions): void {
+  setTimeout(() => {
+    log.error({ deadlineMs }, 'shutdown deadline passed; exiting');
+    process.exit(1);
+  }, deadlineMs).unref();
+}
+
+/**
  * Runs `close` on the first SIGINT or SIGTERM. A shutdown still running at the deadline
  * ends the process, and so does a second signal. Either is safe, because all state is
  * durable and what was cut short is replayed.
  */
-export function closeOnSignal(
-  { log, deadlineMs }: ShutdownOptions,
-  close: () => Promise<void>,
-): void {
+export function closeOnSignal(options: ShutdownOptions, close: () => Promise<void>): void {
+  const { log } = options;
   const shutdown = (signal: NodeJS.Signals): void => {
     process.removeListener('SIGINT', shutdown);
     process.removeListener('SIGTERM', shutdown);
 
     log.info({ signal }, 'shutting down');
-    // Unreferenced, so that it never keeps alive a process that has finished.
-    setTimeout(() => {
-      log.error({ deadlineMs }, 'shutdown deadline passed; exiting');
-      process.exit(1);
-    }, deadlineMs).unref();
+    exitAtDeadline(options);
 
     close().catch((error: unknown) => {
       log.error({ err: error }, 'shutdown failed');

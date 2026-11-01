@@ -22,6 +22,7 @@ The health server uses `node:http`, the backlog report uses SQL, and Kafka lag u
 - **A second signal ends the process at once,** which lets an operator stop a stuck shutdown without waiting.
 - **A forced exit is safe,** because it is the same as a crash: uncommitted work rolls back, and no offset has passed durable work. A test forces one and proves that the work is replayed once.
 - **The timer doesn't keep a process alive.** A shutdown that finishes early exits immediately.
+- **A role that stops with no signal gets the same deadline.** A role failure, lost ownership or a failed wait for the lock starts it before anything closes, because closing a connection to a host that has gone quiet can hang, and sockets in that state keep the process alive. A test stalls a role's database connection with a proxy and proves that the role exits and a successor takes the lock.
 
 ### Closing a consumer doesn't interrupt a join
 

@@ -124,6 +124,21 @@ describe('publishing the Outbox', () => {
     expect(producer.sent.map((message) => message.key)).toEqual(['BTC-USD']);
   });
 
+  it('records a send failure whose text PostgreSQL would refuse, and cuts it to length', async () => {
+    const head = await acceptEvent(pool, sell());
+    const producer = {
+      ...fakeProducer(),
+      send: () => Promise.reject(new Error(`broker\0said ${'x'.repeat(1_000)}`)),
+    };
+
+    expect(await runPass(producer)).toBe(0);
+
+    const failure = await readEvent(head.eventId);
+    expect(failure).toMatchObject({ published: false, attempts: 1 });
+    expect(failure.last_error).toHaveLength(500);
+    expect(failure.last_error).toMatch(/^Error: brokersaid x+$/);
+  });
+
   it('never sends a later event while the head is waiting to retry', async () => {
     const head = await acceptEvent(pool, sell());
     const later = await acceptEvent(pool, sell());

@@ -44,6 +44,11 @@ describe('loadConfig', () => {
   it.each([
     ['PORT', 'http'],
     ['PORT', '-1'],
+    // Number() would read these four as 0, 1000, 16 and 80, so each would pass as a real setting.
+    ['PORT', ''],
+    ['PORT', '1e3'],
+    ['PORT', '0x10'],
+    ['PORT', ' 80'],
     ['ACCEPTANCE_LOCK_TIMEOUT_MS', '1.5'],
     // In PostgreSQL a lock_timeout of 0 means no limit, which would unbound the wait.
     ['ACCEPTANCE_LOCK_TIMEOUT_MS', '0'],
@@ -178,6 +183,9 @@ describe('loadExternalConfig', () => {
 
   it.each([
     ['EXTERNAL_API_URL', 'not a url'],
+    // This one parses, with 'localhost:' as its scheme, and fetch could never call it.
+    ['EXTERNAL_API_URL', 'localhost:18080/v1/notifications'],
+    ['EXTERNAL_API_URL', 'ftp://example.com/v1/notifications'],
     ['EXTERNAL_SESSION_TIMEOUT_MS', '5999'],
     ['EXTERNAL_RESTART_DELAY_MS', '0'],
     ['EXTERNAL_TIMEOUT_MS', '0'],
@@ -189,6 +197,20 @@ describe('loadExternalConfig', () => {
     ['EXTERNAL_MAX_ATTEMPTS', '0'],
   ])('rejects %s=%s', (name, value) => {
     expect(() => loadExternalConfig({ DATABASE_URL, [name]: value })).toThrow(name);
+  });
+
+  it('accepts an https target', () => {
+    const targetUrl = 'https://partner.example.com/v1/notifications';
+
+    expect(loadExternalConfig({ DATABASE_URL, EXTERNAL_API_URL: targetUrl }).targetUrl).toBe(
+      targetUrl,
+    );
+  });
+
+  it('keeps credentials in a refused target out of the error, which reaches the logs', () => {
+    expect(() =>
+      loadExternalConfig({ DATABASE_URL, EXTERNAL_API_URL: 'ftp://user:s3cret@example.com/x' }),
+    ).toThrow(/^(?!.*s3cret)EXTERNAL_API_URL/);
   });
 
   it.each(['0', '100'])('accepts a jitter of %s percent', (value) => {

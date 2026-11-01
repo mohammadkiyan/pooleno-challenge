@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -176,6 +177,32 @@ describe('matching with one lane per partition', () => {
   });
 
   describe('a message that cannot be read as an event', () => {
+    it('is quarantined for a value PostgreSQL would refuse, and its partition is not held', async () => {
+      const btcSell = await acceptEvent(pool, BTC_SELL);
+      const btcBuy = await acceptEvent(pool, BTC_BUY);
+      const poisoned = JSON.stringify({
+        ...btcSell,
+        eventId: randomUUID(),
+        orderId: randomUUID(),
+        symbol: 'BTC\0USD',
+      });
+      await produceRaw(stream, [
+        { key: 'BTC-USD', value: JSON.stringify(btcSell) },
+        { key: 'BTC-USD', value: poisoned },
+        { key: 'BTC-USD', value: JSON.stringify(btcBuy) },
+      ]);
+
+      const matcher = startMatching();
+      const url = await healthUrlOf(matcher);
+
+      await waitForStatus(btcBuy.orderId, 'FILLED');
+      await eventually(async () => {
+        expect(await committedMessages(stream)).toBe(3);
+        expect((await readHealth(url, '/health/ready')).status).toBe(200);
+      });
+      expect((await readQuarantine(pool)).map((row) => row.raw_value.toString())).toEqual([poisoned]);
+    });
+
     it('is quarantined, and the orders behind it on its partition still trade', async () => {
       const btcSell = await acceptEvent(pool, BTC_SELL);
       const btcBuy = await acceptEvent(pool, BTC_BUY);

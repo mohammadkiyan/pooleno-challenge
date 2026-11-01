@@ -51,26 +51,33 @@ export async function acquireSessionLock(
   await client.connect();
 
   let announced = false;
-  while (!signal.aborted) {
-    const { rows } = await client.query<{ acquired: boolean }>(
-      'SELECT pg_try_advisory_lock($1) AS acquired',
-      [lockId],
-    );
-    if (rows[0]?.acquired) {
-      return {
-        lost: lost.signal,
-        assertHeld: async () => {
-          await client.query('SELECT 1');
-        },
-        release,
-      };
-    }
+  try {
+    while (!signal.aborted) {
+      const { rows } = await client.query<{ acquired: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS acquired',
+        [lockId],
+      );
+      if (rows[0]?.acquired) {
+        return {
+          lost: lost.signal,
+          assertHeld: async () => {
+            await client.query('SELECT 1');
+          },
+          release,
+        };
+      }
 
-    if (!announced) {
-      log.info('another process owns this role; waiting');
-      announced = true;
+      if (!announced) {
+        log.info('another process owns this role; waiting');
+        announced = true;
+      }
+      await pause(RETRY_MS, signal);
     }
-    await pause(RETRY_MS, signal);
+  } catch (error) {
+    // A query that timed out here can still have run, and taken the lock for this session, so
+    // the connection must go. Not awaited, so that a quiet socket can't hide this failure.
+    void release();
+    throw error;
   }
 
   await release();

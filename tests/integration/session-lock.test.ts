@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { acquireSessionLock, type SessionLock } from '../../src/infrastructure/session-lock.js';
+import { startStallingProxy } from '../support/stalling-proxy.js';
 import { TEST_DATABASE_URL } from '../support/test-database.js';
 
 const LOCK_ID = 7_260_900;
@@ -61,6 +62,43 @@ describe('session lock', () => {
 
     await expect(waiting).resolves.toBeUndefined();
     await owner.release();
+  });
+
+  it('gives up a lock that a timed-out attempt took, so a successor can have it', { timeout: 30_000 }, async () => {
+    const proxy = await startStallingProxy(TEST_DATABASE_URL);
+    const owner = await requireLock();
+    const waiterLog = pino({ level: 'silent' });
+    const announced = vi.spyOn(waiterLog, 'info');
+
+    const waiter = acquireSessionLock(proxy.url, LOCK_ID, {
+      signal: new AbortController().signal,
+      log: waiterLog,
+    });
+    const failure = expect(waiter).rejects.toThrow('Query read timeout');
+    await vi.waitFor(() => {
+      expect(announced).toHaveBeenCalled();
+    });
+
+    // The waiter's next attempt still reaches PostgreSQL and takes the lock. Only the answer is lost.
+    proxy.stall('replies');
+    await owner.release();
+    await vi.waitFor(
+      async () => {
+        const { rows } = await pool.query<{ granted: number }>(
+          `SELECT count(*)::int AS granted FROM pg_locks
+            WHERE locktype = 'advisory' AND objid = $1 AND granted`,
+          [LOCK_ID],
+        );
+        expect(rows[0]?.granted).toBe(1);
+      },
+      { timeout: 5_000, interval: 50 },
+    );
+
+    await failure;
+
+    const successor = await requireLock();
+    await successor.release();
+    await proxy.close();
   });
 
   it('reports the loss when the connection holding the lock dies', async () => {
