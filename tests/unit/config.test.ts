@@ -99,11 +99,18 @@ describe('loadMatchingConfig', () => {
       sessionTimeoutMs: 10_000,
       restartDelayMs: 1_000,
       statementTimeoutMs: 60_000,
+      laneCapacity: 10_000,
     });
   });
 
   it('requires DATABASE_URL', () => {
     expect(() => loadMatchingConfig({})).toThrow('DATABASE_URL is required');
+  });
+
+  it.each(['0', '1.5'])('rejects a lane capacity of %s', (value) => {
+    expect(() => loadMatchingConfig({ DATABASE_URL, MATCHING_LANE_CAPACITY: value })).toThrow(
+      'MATCHING_LANE_CAPACITY',
+    );
   });
 
   it('reads the statement timeout', () => {

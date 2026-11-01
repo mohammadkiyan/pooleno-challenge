@@ -104,9 +104,12 @@ async function advanceProgress(tx: PoolClient, symbol: string, sequence: bigint)
   );
 }
 
-export async function findBookProgress(tx: PoolClient): Promise<BookProgress[]> {
+/** Covers every symbol, or only `symbol` when it is given. */
+export async function findBookProgress(tx: PoolClient, symbol?: string): Promise<BookProgress[]> {
   const { rows } = await tx.query<{ symbol: string; last_applied_seq: string }>(
-    'SELECT symbol, last_applied_seq FROM matching_progress',
+    `SELECT symbol, last_applied_seq FROM matching_progress
+      WHERE $1::text IS NULL OR symbol = $1`,
+    [symbol],
   );
   return rows.map((row) => ({
     symbol: row.symbol,
@@ -114,8 +117,14 @@ export async function findBookProgress(tx: PoolClient): Promise<BookProgress[]> 
   }));
 }
 
-/** Oldest first, so that adding them in this order restores each price level's queue. */
-export async function findRestingOrders(tx: PoolClient): Promise<StoredRestingOrder[]> {
+/**
+ * Covers every symbol, or only `symbol` when it is given. Oldest first, so that adding them
+ * in this order restores each price level's queue.
+ */
+export async function findRestingOrders(
+  tx: PoolClient,
+  symbol?: string,
+): Promise<StoredRestingOrder[]> {
   const { rows } = await tx.query<{
     id: string;
     symbol: string;
@@ -126,7 +135,9 @@ export async function findRestingOrders(tx: PoolClient): Promise<StoredRestingOr
     `SELECT id, symbol, side, price_units, remaining_units
        FROM orders
       WHERE status IN ('OPEN', 'PARTIALLY_FILLED') AND remaining_units > 0
+        AND ($1::text IS NULL OR symbol = $1)
       ORDER BY symbol, acceptance_seq`,
+    [symbol],
   );
   return rows.map((row) => ({
     orderId: row.id,

@@ -535,7 +535,7 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
       await waitForPublished(order.eventId);
       const matcher = startRole('matching');
 
-      await matcher.waitForLog('matching stopped; restoring from the database before retrying', 2);
+      await matcher.waitForLog('partition held; restoring its book before retrying', 2);
       expect(await readOrder(pool, order.orderId)).toMatchObject({ status: 'QUEUED' });
       expect(await readProgress(pool, 'ETH-USD')).toBeUndefined();
       expect(await committedMessages(stream)).toBe(0);
@@ -566,7 +566,7 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
       await waitForPublished(b1.eventId);
 
       // The sequence guard refuses to skip ahead.
-      await matcher.waitForLog('matching stopped; restoring from the database before retrying', 2);
+      await matcher.waitForLog('partition held; restoring its book before retrying', 2);
       expect(await readOrder(pool, b1.orderId)).toMatchObject({ status: 'QUEUED' });
       expect(await readProgress(pool, 'ETH-USD')).toBe('1');
 

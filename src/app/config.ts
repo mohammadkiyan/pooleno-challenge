@@ -38,6 +38,7 @@ export interface MatchingConfig {
   sessionTimeoutMs: number;
   restartDelayMs: number;
   statementTimeoutMs: number;
+  laneCapacity: number;
 }
 
 export interface NotificationRetryPolicy {
@@ -117,6 +118,8 @@ export function loadMatchingConfig(env: NodeJS.ProcessEnv = process.env): Matchi
       fallback: 60_000,
       min: 1,
     }),
+    // A full lane holds back every partition, because they share one stream.
+    laneCapacity: readInteger(env, 'MATCHING_LANE_CAPACITY', { fallback: 10_000, min: 1 }),
   };
 }
 

@@ -74,7 +74,7 @@ describe('a match that takes longer than 5 s to write', () => {
       { timeout: 25_000, interval: 100 },
     );
 
-    expect(role.countLogs('matching stopped; restoring from the database before retrying')).toBe(0);
+    expect(role.countLogs('partition held; restoring its book before retrying')).toBe(0);
     expect(role.countLogs('group membership changed; stopping this session')).toBe(0);
   });
 });

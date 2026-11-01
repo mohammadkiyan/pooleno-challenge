@@ -22,7 +22,13 @@ await runAsSoleOwner(
       statementTimeoutMs: config.statementTimeoutMs,
     });
     let assigned = false;
-    reportReadiness(() => Promise.resolve(assigned ? undefined : 'no partitions assigned'));
+    let held = false;
+    reportReadiness(() => {
+      if (!assigned) {
+        return Promise.resolve('no partitions assigned');
+      }
+      return Promise.resolve(held ? 'a partition is held on a failing event' : undefined);
+    });
 
     try {
       await runMatchingConsumer({
@@ -31,10 +37,14 @@ await runAsSoleOwner(
         groupId: config.groupId,
         sessionTimeoutMs: config.sessionTimeoutMs,
         restartDelayMs: config.restartDelayMs,
+        laneCapacity: config.laneCapacity,
         signal,
         log,
         onAssignmentChange: (value) => {
           assigned = value;
+        },
+        onHeldChange: (value) => {
+          held = value;
         },
       });
     } finally {

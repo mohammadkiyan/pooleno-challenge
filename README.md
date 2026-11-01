@@ -330,7 +330,8 @@ Compose sets its own values. Running on the host reads `.env`, copied from [.env
 | `MATCHING_GROUP_ID` | API (only to report lag), matching | Kafka consumer group | `matching-v1` |
 | `MATCHING_SESSION_TIMEOUT_MS` | Matching | Kafka session timeout, at least 6000 | `10000` |
 | `MATCHING_RESTART_DELAY_MS` | Matching | Pause before restoring after a failure | `1000` |
-| `MATCHING_STATEMENT_TIMEOUT_MS` | Matching | Longest one database statement may run, at least 1. An order whose fills take longer blocks matching until this is raised | `60000` |
+| `MATCHING_STATEMENT_TIMEOUT_MS` | Matching | Longest one database statement may run, at least 1. An order whose fills take longer holds its partition until this is raised | `60000` |
+| `MATCHING_LANE_CAPACITY` | Matching | Messages buffered per partition, at least 1. A full lane holds back every partition | `10000` |
 | `EXTERNAL_GROUP_ID` | API (only to report lag), external | Kafka consumer group | `external-notification-v1` |
 | `EXTERNAL_SESSION_TIMEOUT_MS` | External | Kafka session timeout, at least 6000 | `10000` |
 | `EXTERNAL_RESTART_DELAY_MS` | External | Pause after a failed session or delivery pass | `1000` |
@@ -408,7 +409,9 @@ The tables list each failure and its result.
 | Book disagrees with the database | The test changes a maker's row | The transaction aborts with nothing written |
 | `SIGTERM` during a transaction | The test holds the progress row, then sends `SIGTERM` and releases it | The transaction finishes, the exit is clean, no offset passes durable work, and the restart is a no-op |
 | Rebalance during a transaction | A rival consumer joins the group while the transaction is parked | No offset is committed afterwards, and the redelivery is a no-op |
-| Malformed message | The test produces one directly to the topic | Later events wait with no state change, until an operator moves the offset past it |
+| Malformed message | The test produces one directly to the topic | Later events on its partition wait with no state change, until an operator moves the offset past it. Other partitions continue |
+| Blocked database write | The test holds BTC's progress row | ETH on another partition finishes while BTC waits, and BTC then completes in order |
+| Repeated failure on one symbol | A trigger rejects BTC's trades | Only BTC's partition is held and readiness is false. ETH finishes, with no session restart, and BTC completes once the failure clears |
 | Lost Kafka event | The test marks an event as published without sending it, with a later event behind it in the topic | Matching blocks rather than skips. The operator procedure republishes unapplied events from the Outbox, and matching resumes in order with no repeated trade |
 
 ### External notifications
@@ -420,7 +423,7 @@ The tables list each failure and its result.
 | Crash during the call | `SIGKILL` of the worker while the mock withholds its answer | The next owner reclaims the job, with one effect |
 | Crash after the answer, before recording it | A preload that sends `SIGKILL` just before the result is written | The job is still due with no attempt used, and the retry is replayed, with one effect |
 | Destination outage | The mock is not running | Matching continues, and attempts and due times survive a restart of the role |
-| Matching blocked | A malformed event stops matching | Valid events behind it are still notified, because the groups are separate |
+| Matching blocked | A malformed event holds its partition in matching | Valid events behind it are still notified, because the groups are separate |
 | Kafka unreachable | The role points at a closed port | Existing jobs are still delivered |
 | Retries exhausted | The mock is not running, with a small budget | The job is `FAILED`, and the order is unchanged |
 | Crash inside the handoff | The test holds the Inbox row to park the transaction, then sends `SIGKILL` | No job and no offset are kept, and the restart delivers once |
@@ -482,7 +485,7 @@ docs/adr/             Recorded decisions
 ## Known limitations
 
 - **Delivery guarantee:** events are delivered at least once and their effects are idempotent. This is not a claim of exactly-once behaviour for the complete workflow.
-- **Single-owner throughput:** one publisher, one matcher and one notification worker do the work, and the matcher and the worker are serial. A standby takes over but does not share the load, a blocked event stops every symbol in the matcher, and an unresponsive destination costs the worker a full timeout per due job. In one local run on a 12-core machine, the publisher sent about 230 events per second and the worker delivered about 135 jobs per second.
+- **Single-owner throughput:** one publisher, one matcher and one notification worker do the work, and the worker is serial. The matcher handles one message at a time per partition, sharing one JavaScript thread. A standby takes over but does not share the load, a blocked event stops the symbols on its partition, a lane that reaches its limit of buffered messages holds back every partition, and an unresponsive destination costs the worker a full timeout per due job. In one local run on a 12-core machine, the publisher sent about 230 events per second and the worker delivered about 135 jobs per second.
 - **Notifications:** they are not ordered among themselves, can arrive before the order is matched, and rely on a real destination remembering keys for longer than the retry budget. First start notifies every order still retained in the topic. See [ADR 0003](docs/adr/0003-phase-3-external-notifications.md#consequences).
 - **Mock destination:** `/__control` has no authentication, and `mock-api` is for local use only. A real destination is not part of this project.
 - **Retention and recovery:** Kafka keeps events for 30 days. Beyond that, or after losing Kafka's data, an operator republishes unapplied events from the Outbox by following [ADR 0002](docs/adr/0002-phase-2-messaging-and-matching.md#operator-procedures).

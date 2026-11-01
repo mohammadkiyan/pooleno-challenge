@@ -91,8 +91,9 @@ Offsets are committed by hand, as `offset + 1`, and only after the event's work 
 | Failure | Behavior | Limit |
 |---|---|---|
 | Kafka send fails | The event stays in the Outbox, and its symbol waits. The delay doubles from 500 ms to 30 s | None. It retries for as long as the outage lasts |
-| Matching session fails | The role discards the book, waits 1 s, restores, and starts again | None. A bad event blocks and restarts until an operator acts |
-| Sequence gap, or a malformed message at matching | Blocks with an error. Later orders depend on this one, so it can't be skipped | Needs the [operator procedure](adr/0002-phase-2-messaging-and-matching.md#operator-procedures) |
+| Matching event fails | Only its partition is held. The role restores that event's book, waits 1 s, and retries it without committing. Other partitions continue | None. A bad event holds its partition until an operator acts |
+| Matching session fails | A Kafka failure discards every book. The role waits 1 s, restores, and starts again | None |
+| Sequence gap, or a malformed message at matching | Holds its partition with an error. Later orders depend on this one, so it can't be skipped | Needs the [operator procedure](adr/0002-phase-2-messaging-and-matching.md#operator-procedures) |
 | Malformed message at the external role | Quarantined durably, then skipped. Notifications don't depend on each other | Inspected under the [quarantine procedure](adr/0003-phase-3-external-notifications.md#operator-procedures) |
 | Destination fails transiently | The job retries with jitter and honours `Retry-After`. The delay doubles from 1 s to 5 min | 400 attempts, about a day, then `FAILED` |
 | Destination rejects permanently | The job is `FAILED` at once, for a manual redrive under the same key | Needs an operator |
@@ -129,7 +130,9 @@ The matching role keeps no state on disk. When it gains ownership, or after any 
 
 **Partition-key ownership bounds consumer scale.** A partition has at most one active consumer in a group, so the topic's 3 partitions allow at most 3 useful consumers per group, and a fourth would sit idle. All of a symbol's events are in one partition, so one symbol is never processed in parallel, however many consumers run. Partitions can't be added later without moving symbols between partitions and breaking their order across the change.
 
-**Parallelism is possible across books only.** A faster single symbol would need a faster matcher, not more of them. Different symbols could run on different partitions, because no state crosses books.
+**Parallelism is possible across books only.** A faster single symbol would need a faster matcher, not more of them. The one matcher gives each partition its own sequential lane, because no state crosses books. A slow database write or a failing event therefore holds only its partition.
+
+The lanes have limits. Symbols that share a partition still wait for each other. Lanes overlap only during asynchronous waits, because matching calculations share one JavaScript thread. A database outage holds every lane. Each lane buffers at most `MATCHING_LANE_CAPACITY` messages, and a full one holds back all partitions, because the client delivers them through one stream and can pause only all of it.
 
 **The publisher, matching and external roles each have one active owner**, proved by a PostgreSQL session advisory lock. A standby waits for the lock, and takes over when the owner's connection ends. A consumer group alone isn't enough, because a member that has lost its partition can still be writing to PostgreSQL while its successor starts.
 
@@ -169,7 +172,7 @@ Liveness reports that the process runs, and never looks at a dependency. Readine
 |---|---|---|---|
 | API | 8080 | The pool can lend a connection and run a query | `database unavailable` |
 | Publisher | 8081 | It owns the role, and Kafka answers | `waiting for ownership`, `ownership cannot be confirmed`, `kafka unreachable` |
-| Matching | 8082 | It owns the role, its books are restored, and it has partitions | `waiting for ownership`, `ownership cannot be confirmed`, `no partitions assigned` |
+| Matching | 8082 | It owns the role, its books are restored, and it has partitions | `waiting for ownership`, `ownership cannot be confirmed`, `no partitions assigned`, `a partition is held on a failing event` |
 | External | 8083 | It owns the role, and it has partitions | `waiting for ownership`, `ownership cannot be confirmed`, `no partitions assigned` |
 
 The ownership roles also report `shutting down`. The API stops listening instead, so a probe gets a refused connection, or Fastify's `503` on a connection that was already open. The destination being down is a delivery condition, so it changes neither check on the external role.

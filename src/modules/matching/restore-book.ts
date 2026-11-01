@@ -6,13 +6,13 @@ import { OrderBook } from './order-book.js';
 export type OrderBooks = Map<string, OrderBook>;
 
 /**
- * Rebuilds every book from one consistent snapshot of the database. Queued orders
- * are left out because they enter the book through their events.
+ * Rebuilds every book, or only `symbol`'s, from one consistent snapshot of the database.
+ * Queued orders are left out because they enter the book through their events.
  */
-export async function restoreBooks(pool: Pool): Promise<OrderBooks> {
+export async function restoreBooks(pool: Pool, symbol?: string): Promise<OrderBooks> {
   const { progress, orders } = await withSnapshot(pool, async (tx) => ({
-    progress: await findBookProgress(tx),
-    orders: await findRestingOrders(tx),
+    progress: await findBookProgress(tx, symbol),
+    orders: await findRestingOrders(tx, symbol),
   }));
 
   const books: OrderBooks = new Map(
@@ -28,4 +28,14 @@ export async function restoreBooks(pool: Pool): Promise<OrderBooks> {
   }
 
   return books;
+}
+
+/** Replaces one symbol's book, leaving the others in use. A symbol not yet matched has no book. */
+export async function restoreBook(pool: Pool, books: OrderBooks, symbol: string): Promise<void> {
+  const book = (await restoreBooks(pool, symbol)).get(symbol);
+  if (book) {
+    books.set(symbol, book);
+  } else {
+    books.delete(symbol);
+  }
 }

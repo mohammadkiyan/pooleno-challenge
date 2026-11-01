@@ -306,9 +306,7 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
       expect((await readEffects(mock)).map((effect) => effect.idempotencyKey).sort()).toEqual(
         [`external-notify:${seller.eventId}`, `external-notify:${buyer.eventId}`].sort(),
       );
-      expect(matcher.countLogs('matching stopped; restoring from the database before retrying')).toBe(
-        0,
-      );
+      expect(matcher.countLogs('partition held; restoring its book before retrying')).toBe(0);
     });
 
     it('delivers an event that matching is blocked behind, because the groups are separate', async () => {
@@ -324,7 +322,7 @@ describe('external notifications through real processes', { timeout: 120_000 }, 
 
       await waitForJob(event.eventId, { status: 'SUCCEEDED' });
       await waitForCommittedMessages(2);
-      await matcher.waitForLog('matching stopped; restoring from the database before retrying', 2);
+      await matcher.waitForLog('partition held; restoring its book before retrying', 2);
       expect(await committedMessages(matchingGroup())).toBe(0);
       expect(await readOrder(pool, event.orderId)).toMatchObject({ status: 'QUEUED' });
     });

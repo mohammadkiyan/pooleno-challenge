@@ -103,11 +103,13 @@ Only then is the match applied to the book, and only then is the offset committe
 
 ## Decision: offsets and group membership
 
-- Offsets are committed explicitly, one message at a time, after the transaction and the book update.
+- Offsets are committed explicitly, per partition and one message at a time, after the transaction and the book update.
 - A rebalance, a rejoin or a shutdown ends the session and suppresses any further commit. The redelivery that follows is a no-op through the Inbox. An uncommitted durable result is safe, and a commit made after losing a partition is not.
 - A session that ends for any reason discards its book. The next session restores from the database, so a book never outlives the group membership it was built under.
 
-**Serial across partitions:** one process consumes all partitions in one loop, so a poison event or a gap blocks every symbol in the matcher, not only its own. The handoff requires the block, and accepts single-owner throughput in version 1. The publisher does not share this limit: one failing symbol there leaves the others publishing.
+**One lane per partition:** one process consumes all partitions, and each partition handles its messages one at a time while the others proceed. A poison event or a gap holds its own partition, restoring the affected book and retrying without committing, so the symbols on other partitions continue. The block the handoff requires still applies to everything behind the event on that partition. The one-active-matcher lock is unchanged. The session waits for every lane before it ends, so no transaction overlaps the next session.
+
+**Bounded lanes:** each lane buffers at most `MATCHING_LANE_CAPACITY` messages. The client delivers all partitions through one stream and can pause only all of it, so a full lane holds back every partition until it has room. Dropping and refetching the excess would keep the others moving, but it relies on internals of the client. With the default of 10,000, the other partitions stall only after that many messages wait behind one stuck or slow event.
 
 ## Decision: trades in `GET`
 
@@ -151,10 +153,10 @@ Both repairs are covered by end-to-end tests, which make the same offset changes
 
 ## Consequences
 
-- Throughput is limited to one matcher working serially. This is the accepted design for version 1.
+- Throughput is limited to one matcher, with one lane per partition. Database waits overlap across lanes, but matching calculations share one JavaScript thread, so a long calculation delays every lane and there is no CPU parallelism. This is the accepted design for version 1.
 - Duplicate delivery is expected and absorbed. Nothing here claims exactly-once behaviour across HTTP, PostgreSQL and Kafka, and the guarantee is at-least-once delivery with idempotent effects.
 - After a crash, restart takes up to the Kafka session timeout, because the group waits for the dead member to expire.
-- An event that keeps failing blocks matching and restarts its session every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. `GET /ops/backlog` reports the lag, and nothing alerts on it ([ADR 0004](0004-phase-4-evidence-and-operations.md#limits-of-the-figures)).
-- One large order delays every symbol, because they share one serial matcher. Each statement must finish within `MATCHING_STATEMENT_TIMEOUT_MS`, or the order retries and blocks matching until the limit is raised. A timed-out order must not be skipped, because it is a real accepted order. One run each on a development machine, through the real role with the 60 s default: 400,000 makers took about 16 s, 1,000,000 about 42 s and 2,000,000 about 101 s, all including startup. At the former 5 s limit, 400,000 makers never completed. The limit was not reached in these runs, so the largest order it allows is unknown, and no cap on makers per order exists.
+- An event that keeps failing holds its partition and retries every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. Readiness reports `a partition is held on a failing event`, and `GET /ops/backlog` reports the lag. Nothing alerts on it ([ADR 0004](0004-phase-4-evidence-and-operations.md#limits-of-the-figures)). A failure shared by all lanes, such as a database outage, holds them all.
+- One large order delays the symbols on its partition, because they share a lane. Other partitions continue: in one run through the real role, with a 400,000-maker BTC order on partition 0, an ETH order on partition 2 finished at about 1.6 s and the BTC order at about 15.5 s. Each statement must finish within `MATCHING_STATEMENT_TIMEOUT_MS`, or the order retries and holds its partition until the limit is raised. A timed-out order must not be skipped, because it is a real accepted order. One run each on a development machine, through the real role with the 60 s default: 400,000 makers took about 16 s, 1,000,000 about 42 s and 2,000,000 about 101 s, all including startup. At the former 5 s limit, 400,000 makers never completed. The limit was not reached in these runs, so the largest order it allows is unknown, and no cap on makers per order exists.
 - Applying `002_matching.sql` to a database with data takes short write-blocking locks to build indexes, and the new check validates existing rows. Orders from Phase 1 are all `QUEUED` with a remainder, so they pass.
 - `fetch` in Node.js 26.7.0 (undici 8.9.0) stalled for 2.5 to 30 seconds when it reused an idle keep-alive connection. The same requests took milliseconds through a raw socket or `http.Agent`, and `fetch` stalled against a bare `node:http` server too, so the API is not the cause. The demo and the end-to-end tests send `connection: close`, which avoids it. The cause inside `fetch` was not traced, so Phase 3's outbound calls should not depend on its connection reuse without checking this first.
