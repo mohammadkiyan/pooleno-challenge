@@ -62,7 +62,7 @@ function apply(event: OrderAcceptedV1) {
   return applyAcceptedOrder(pool, books, event);
 }
 
-/** Accepts and applies the handoff fixture on ETH-USD. */
+/** Accepts and applies the matching fixture on ETH-USD. */
 async function runFixture() {
   const s1 = await sellAt('100.00', '0.0020');
   const s2 = await sellAt('100.00', '0.0030');

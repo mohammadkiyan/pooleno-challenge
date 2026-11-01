@@ -1,15 +1,15 @@
-# ADR 0004: Phase 4 evidence and operations choices
+# ADR 0004: Shutdown, health and visibility
 
-- **Status:** proposed; Phase 4 is awaiting review
+- **Status:** accepted
 - **Date:** 2026-10-31
 
 ## Context
 
-The handoff fixes the requirements of this phase: readiness that goes false first on `SIGTERM`, bounded draining, a shutdown deadline inside the termination grace period, liveness that ignores remote dependencies, readiness by role, and visibility of the Outbox, matching, external jobs and Kafka lag. This ADR records what it left to the implementation, and the measurements behind each choice. The resulting behavior is described in the [architecture document](../architecture.md).
+Running under a supervisor such as Kubernetes needs readiness that goes false first on `SIGTERM`, bounded draining, a shutdown deadline inside the termination grace period, liveness that ignores remote dependencies, readiness by role, and visibility of the Outbox, matching, external jobs and Kafka lag. This ADR records the choices behind those, and the measurements behind each one. The resulting behavior is described in the [architecture document](../architecture.md).
 
 ## Decision: no new dependencies
 
-The health server uses `node:http`, the backlog report uses SQL, and Kafka lag uses the installed client's admin API. `@fastify/under-pressure` and a metrics library stay out until there is evidence for them, as the notes on overload ask.
+The health server uses `node:http`, the backlog report uses SQL, and Kafka lag uses the installed client's admin API. `@fastify/under-pressure` and a metrics library stay out until there is evidence for them.
 
 ## Decision: the shutdown deadline
 
@@ -45,12 +45,12 @@ With Kafka paused, so that connections stay open and nothing answers, matching a
 | The API is ready without Kafka | Acceptance doesn't need it. Reporting otherwise would take a working API out of service |
 | The API checks admission capacity through its pool | A pool that can't lend a connection within its 2 s timeout is out of capacity for new requests too, so one query covers both |
 | Kafka being down makes the other roles not ready but alive | They can't do their work, but a restart wouldn't help. The publisher's check asks the broker directly, not the client's cached metadata |
-| The destination being down affects neither check | The handoff calls this a delivery condition |
+| The destination being down affects neither check | It is a delivery condition, and says nothing about whether the role works |
 | Compose counts failures only after a 60 s `start_period`, then flips after 3 | The earlier `retries: 30` kept a role showing `healthy` for a minute into an outage. With this setting, an outage showed as `unhealthy` within 10 s, and a slow start isn't called unhealthy. Compose restarts nothing for it |
 
 ## Decision: the backlog limit
 
-The handoff asks for a documented limit on acceptance during a Kafka outage, and for readiness to consider "admission/backlog capacity." The notes on overload ask to defer backlog-based admission control until there is evidence for it. These two pull in different directions, so this is the resolution:
+Acceptance during a Kafka outage needs a stated limit. Refusing orders because of backlog is one option, and it needs evidence before it earns its cost, so this is the decision:
 
 **The limit is the disk available to PostgreSQL, and nothing refuses orders because of backlog.** Readiness covers capacity to admit a request, through the pool, and not the size of the backlog. Refusing orders during an outage would give up the property that acceptance outlives Kafka, in exchange for protecting a resource that a simple alert can watch.
 
@@ -83,7 +83,7 @@ Every step logs `role`, `requestId`, `orderId`, `eventId`, `symbol` and `accepta
 
 ## Decision: what the crash tests prove
 
-The tests assert durable results (orders, trades, external effects and FIFO) after a real process dies at a known point. Three boundaries were missing and were added in this phase:
+The tests assert durable results (orders, trades, external effects and FIFO) after a real process dies at a known point. Three boundaries need a specific method:
 
 | Boundary | How it's reached | Why it needs this method |
 |---|---|---|
@@ -96,7 +96,5 @@ The tests assert durable results (orders, trades, external effects and FIFO) aft
 - **Restart after a crash takes up to one Kafka session timeout,** because the group waits for the dead member. This is 10 s by default, and the whole stack came back in 24 s after a kill of every container.
 - **A second instance on one host needs its own `HEALTH_PORT`,** and `docker compose up --scale` conflicts with the published health ports. A standby is therefore a host or test setup, not the default Compose stack.
 - **`/health/*` and `/ops/*` have no authentication,** like the rest of this demo. An ingress must not route them.
-- **Existing Compose users get new published ports,** 8081 to 8083, all bound to loopback. They started as 58081 to 58083 and moved below Linux's ephemeral range (32768 to 60999) after a real failure: right after a test run, `docker compose up` couldn't bind one.
-- **Ports from earlier phases can still fail to bind for up to 60 s.** 55432, 58080 and 59092 are in the ephemeral range. A closed client connection that used one as its source port holds it in `TIME_WAIT`, and Docker's bind fails with `address already in use` while no process holds the port. Moving these three would also remove the risk, but it changes ports that earlier phases agreed, so it's left for review.
-- **After a failed bind, rerunning `up` isn't safe.** Docker starts the leftover container with no network. `mock-api` then reports `healthy` and `up` exits 0, because its check uses loopback, while nothing can reach it. `docker compose down` followed by `up` recovers and keeps the data, and the [README](../../README.md#if-a-port-wont-bind) gives the steps.
-- **Migration:** this phase adds no migration, and changes no stored data.
+- **Every published port is below Linux's ephemeral range,** 32768 to 60999, and bound to loopback. Inside that range, a closed client connection that used the port as its source holds it in `TIME_WAIT` for up to 60 s, and Docker's bind then fails with `address already in use` while no process holds the port. This happened in practice right after a test run. `HOST_PORT_*` variables move a port that is taken on a reviewer's machine.
+- **After a failed bind, rerunning `up` isn't safe.** Docker starts the leftover container with no network. `mock-api` then reports `healthy` and `up` exits 0, because its check uses loopback, while nothing can reach it. `docker compose down` followed by `up` recovers and keeps the data.

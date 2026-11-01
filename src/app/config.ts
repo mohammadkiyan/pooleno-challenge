@@ -79,7 +79,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
 export function loadKafkaConfig(env: NodeJS.ProcessEnv = process.env): KafkaConfig {
   return {
-    brokers: (env.KAFKA_BROKERS ?? '127.0.0.1:59092').split(','),
+    brokers: (env.KAFKA_BROKERS ?? '127.0.0.1:29092').split(','),
     topic: env.KAFKA_TOPIC ?? 'orders.accepted',
   };
 }
@@ -182,7 +182,7 @@ function readDatabaseUrl(env: NodeJS.ProcessEnv): string {
 
 /** Checked at startup, because a bad URL would otherwise look like an outage for days. */
 function readTargetUrl(env: NodeJS.ProcessEnv): string {
-  const url = env.EXTERNAL_API_URL ?? 'http://127.0.0.1:58080/v1/notifications';
+  const url = env.EXTERNAL_API_URL ?? 'http://127.0.0.1:18080/v1/notifications';
   if (!URL.canParse(url)) {
     // The value is left out, because a URL can carry credentials and this reaches the logs.
     throw new Error('EXTERNAL_API_URL must be an absolute URL');

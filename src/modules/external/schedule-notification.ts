@@ -4,7 +4,7 @@ import { claimInboxEvent } from '../messaging/inbox.repository.js';
 import { insertExternalJob } from './external-job.repository.js';
 
 /** Fixed, so that a new Kafka group replaying the topic still recognises handled events. */
-export const EXTERNAL_CONSUMER_NAME ='external-notification-v1';
+export const EXTERNAL_CONSUMER_NAME = 'external-notification-v1';
 
 /**
  * Records that a notification is owed, in one transaction with the Inbox row. Resolves to

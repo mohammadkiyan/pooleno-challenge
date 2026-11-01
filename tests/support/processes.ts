@@ -139,7 +139,7 @@ export async function startApi(preload?: string): Promise<RunningApi> {
 
 /**
  * Node.js 26.7's `fetch` can stall for longer than a test may take when it reuses an idle
- * connection, so each request opens its own. See docs/adr/0002-phase-2-messaging-and-matching.md.
+ * connection, so each request opens its own. See docs/adr/0002-messaging-and-matching.md.
  */
 export function requestApi(
   api: RunningApi,

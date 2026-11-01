@@ -69,6 +69,7 @@ export class PartitionLanes<T> {
     try {
       while (!this.#stopped && lane.queue.length > 0) {
         await this.#options.work(lane.queue[0] as T);
+        // Not the linked list the book uses, because `capacity` bounds what this has to move.
         lane.queue.shift();
         lane.roomAvailable?.();
       }

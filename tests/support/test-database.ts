@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { expect, vi } from 'vitest';
 
 export const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? 'postgres://pooleno@127.0.0.1:55432/pooleno_test';
+  process.env.TEST_DATABASE_URL ?? 'postgres://pooleno@127.0.0.1:15432/pooleno_test';
 
 export async function resetDatabase(pool: Pool): Promise<void> {
   await pool.query(

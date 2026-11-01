@@ -34,7 +34,7 @@ export async function deliverNotification(
         'content-type': 'application/json',
         'idempotency-key': job.targetKey,
         // Node.js 26.7's `fetch` can stall on a reused idle connection, which would eat into
-        // the timeout here. See docs/adr/0003-phase-3-external-notifications.md.
+        // the timeout here. See docs/adr/0003-external-notifications.md.
         connection: 'close',
       },
       body: job.payload,

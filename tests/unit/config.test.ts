@@ -7,7 +7,7 @@ import {
   loadPublisherConfig,
 } from '../../src/app/config.js';
 
-const DATABASE_URL = 'postgres://pooleno@127.0.0.1:55432/pooleno';
+const DATABASE_URL = 'postgres://pooleno@127.0.0.1:15432/pooleno';
 
 describe('loadConfig', () => {
   it('applies defaults', () => {
@@ -18,7 +18,7 @@ describe('loadConfig', () => {
       logLevel: 'info',
       lockTimeoutMs: 1_000,
       shutdownTimeoutMs: 8_000,
-      kafka: { brokers: ['127.0.0.1:59092'], topic: 'orders.accepted' },
+      kafka: { brokers: ['127.0.0.1:29092'], topic: 'orders.accepted' },
       consumerGroups: ['matching-v1', 'external-notification-v1'],
     });
   });
@@ -54,9 +54,9 @@ describe('loadConfig', () => {
 });
 
 describe('loadKafkaConfig', () => {
-  it('defaults to the local broker and the agreed topic', () => {
+  it('defaults to the local broker and the documented topic', () => {
     expect(loadKafkaConfig({})).toEqual({
-      brokers: ['127.0.0.1:59092'],
+      brokers: ['127.0.0.1:29092'],
       topic: 'orders.accepted',
     });
   });
@@ -92,7 +92,7 @@ describe('loadPublisherConfig', () => {
 });
 
 describe('loadMatchingConfig', () => {
-  it('applies defaults, including the agreed consumer group', () => {
+  it('applies defaults, including the documented consumer group', () => {
     expect(loadMatchingConfig({ DATABASE_URL })).toMatchObject({
       databaseUrl: DATABASE_URL,
       groupId: 'matching-v1',
@@ -159,13 +159,13 @@ describe.each([
 });
 
 describe('loadExternalConfig', () => {
-  it('applies the documented defaults, including the agreed consumer group', () => {
+  it('applies the documented defaults, including the documented consumer group', () => {
     expect(loadExternalConfig({ DATABASE_URL })).toMatchObject({
       databaseUrl: DATABASE_URL,
       groupId: 'external-notification-v1',
       sessionTimeoutMs: 10_000,
       restartDelayMs: 1_000,
-      targetUrl: 'http://127.0.0.1:58080/v1/notifications',
+      targetUrl: 'http://127.0.0.1:18080/v1/notifications',
       timeoutMs: 5_000,
       pollIntervalMs: 500,
       retry: { baseMs: 1_000, capMs: 300_000, jitterPercent: 50, maxAttempts: 400 },

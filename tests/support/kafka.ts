@@ -14,7 +14,7 @@ import { pino } from 'pino';
 import type { KafkaConfig } from '../../src/app/config.js';
 import { ensureTopic } from '../../src/modules/messaging/kafka-topics.js';
 
-const BROKERS = (process.env.TEST_KAFKA_BROKERS ?? '127.0.0.1:59092').split(',');
+const BROKERS = (process.env.TEST_KAFKA_BROKERS ?? '127.0.0.1:29092').split(',');
 
 /** A topic and consumer group that belong to one test. */
 export interface TestStream {

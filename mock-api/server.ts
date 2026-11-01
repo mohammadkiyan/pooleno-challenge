@@ -139,5 +139,5 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 await app.listen({
   host: process.env.MOCK_API_HOST ?? '127.0.0.1',
-  port: Number(process.env.MOCK_API_PORT ?? 58080),
+  port: Number(process.env.MOCK_API_PORT ?? 18080),
 });

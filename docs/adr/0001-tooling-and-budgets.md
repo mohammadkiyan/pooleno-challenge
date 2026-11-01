@@ -1,19 +1,18 @@
-# ADR 0001: Phase 1 tooling and open choices
+# ADR 0001: Tooling, markets and budgets
 
-- **Status:** accepted; Phase 1 was reviewed and approved on 2026-10-31
+- **Status:** accepted
 - **Date:** 2026-10-31
 
 ## Context
 
-The repository was empty, so there were no existing conventions to reuse. The handoff fixes the stack (Node.js and TypeScript, Fastify and TypeBox, PostgreSQL, Kafka, Docker Compose) and proposes defaults (direct SQL through `pg`, SQL migrations, Vitest, tsx, npm). It leaves these choices open and asks for them to be recorded:
+The repository started empty, so there were no existing conventions to reuse. The stack is Node.js and TypeScript, Fastify and TypeBox, PostgreSQL, Kafka and Docker Compose, with direct SQL through `pg`, SQL migrations, Vitest, tsx and npm. This stack leaves these choices open:
 
 - runtime, image and library versions
 - market precision and limits
 - demo identity scope
 - retry and time budgets
-- Kafka client and balanced-tree implementation
 
-This ADR settles the first four. [ADR 0002](0002-phase-2-messaging-and-matching.md) settles the Kafka client and the balanced tree.
+This ADR settles them. [ADR 0002](0002-messaging-and-matching.md) settles the Kafka client and the balanced tree.
 
 ## Decision: versions
 
@@ -23,16 +22,16 @@ Versions are exact in `package.json`, locked in `package-lock.json`, and pinned 
 |---|---|---|---|
 | Node.js | `26.13.0-alpine3.24` | 2026-10-28, LTS | Current LTS line |
 | PostgreSQL | `18.6-alpine3.24` | On Docker Hub | Newest stable major; 19 is still `19rc1` |
-| `fastify` | 5.12.7 | 2026-10-13 | Agreed stack |
-| `typebox` | 1.4.3 | 2026-10-22 | Agreed stack |
+| `fastify` | 5.12.7 | 2026-10-13 | Web framework |
+| `typebox` | 1.4.3 | 2026-10-22 | Request and response schemas |
 | `@fastify/type-provider-typebox` | 6.3.0 | 2026-10-12 | Types routes from TypeBox schemas |
-| `pg` | 8.23.1 | 2026-09-30 | Proposed default: direct SQL |
+| `pg` | 8.23.1 | 2026-09-30 | Direct SQL, with no ORM |
 | `pino` | 10.4.0 | 2026-10-02 | Fastify's own logger |
 | `typescript` | 6.0.3 | see below | Newest version the linter supports |
 | `typescript-eslint` | 8.72.1 | 2026-10-29 | Type-aware strict rules |
 | `eslint` | 10.14.0 | 2026-10-30 | Lint command |
-| `vitest` | 5.0.5 | 2026-10-19 | Proposed default |
-| `tsx` | 4.23.15 | 2026-09-20 | Proposed default for development |
+| `vitest` | 5.0.5 | 2026-10-19 | Test runner |
+| `tsx` | 4.23.15 | 2026-09-20 | Runs TypeScript in development |
 
 `@types/pg` 8.23.1 and `@types/node` 26.6.6 follow their runtime packages.
 
@@ -80,7 +79,7 @@ Every request uses the fixed scope `demo`. It is a server constant and is never 
 | Body limit | 16 KiB | An order is far smaller |
 | `Idempotency-Key` | 16 to 128 characters of `A-Za-z0-9_-` | Excludes the comma, so a repeated header is rejected |
 
-A lock timeout on the key is a `409`: the same request is still running. A lock timeout on the symbol counter is a `503`: a different request is holding the symbol. The handoff defines the first case. The second is a decision made here, because telling that client its own request is in flight would be false.
+A lock timeout on the key is a `409`: the same request is still running. A lock timeout on the symbol counter is a `503`: a different request is holding the symbol. The second is not a `409`, because telling that client its own request is in flight would be false.
 
 The `409` and `422` responses are this API's explicit contract. The IETF `Idempotency-Key` header specification is still a draft.
 

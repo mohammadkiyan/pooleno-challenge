@@ -39,7 +39,7 @@ function restingOn(book: OrderBook, side: OrderSide) {
   ]);
 }
 
-describe('the handoff fixture', () => {
+describe('the matching fixture', () => {
   function bookWithSellers(): OrderBook {
     const book = new OrderBook();
     place(book, 'S1', 'SELL', 100n, 2n);

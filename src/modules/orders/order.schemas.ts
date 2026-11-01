@@ -2,7 +2,7 @@ import Type from 'typebox';
 
 export const OrderSide = Type.Enum(['BUY', 'SELL']);
 export const OrderType = Type.Enum(['LIMIT']);
-export const OrderStatus = Type.Enum(['QUEUED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED', 'REJECTED']);
+export const OrderStatus = Type.Enum(['QUEUED', 'OPEN', 'PARTIALLY_FILLED', 'FILLED']);
 
 // A JSON string, because a JSON number has already lost precision by the time it
 // is parsed. The exact syntax and the market's limits are checked after validation.

@@ -1,5 +1,7 @@
 name: pooleno-challenge
 
+# Every published port is bound to loopback, and HOST_PORT_* moves one that is already taken.
+
 x-app: &app
   build: .
   image: pooleno-order-processing:local
@@ -25,7 +27,7 @@ services:
       # Local development only: no credentials, and the port is bound to loopback.
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1:${HOST_PORT_POSTGRES:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -43,9 +45,9 @@ services:
       CLUSTER_ID: pooleno-local-kafka-01
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      # Containers connect to kafka:19092 and the host to 127.0.0.1:59092.
+      # Containers connect to kafka:19092 and the host to 127.0.0.1:29092.
       KAFKA_LISTENERS: INTERNAL://:19092,HOST://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,HOST://127.0.0.1:59092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,HOST://127.0.0.1:${HOST_PORT_KAFKA:-29092}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_LOG_DIRS: /var/lib/kafka/data
@@ -56,7 +58,7 @@ services:
       # Topics are created deliberately by kafka-init, never by a stray client.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports:
-      - "127.0.0.1:59092:9092"
+      - "127.0.0.1:${HOST_PORT_KAFKA:-29092}:9092"
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -93,7 +95,7 @@ services:
       # Only to report lag, so this role neither waits for Kafka nor needs it to accept orders.
       KAFKA_BROKERS: kafka:19092
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${HOST_PORT_API:-8080}:8080"
     healthcheck:
       <<: *role-health
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/ready"]
@@ -109,7 +111,7 @@ services:
       KAFKA_BROKERS: kafka:19092
       HEALTH_HOST: 0.0.0.0
     ports:
-      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:${HOST_PORT_PUBLISHER:-8081}:8081"
     healthcheck:
       <<: *role-health
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health/ready"]
@@ -129,7 +131,7 @@ services:
       KAFKA_BROKERS: kafka:19092
       HEALTH_HOST: 0.0.0.0
     ports:
-      - "127.0.0.1:8082:8082"
+      - "127.0.0.1:${HOST_PORT_MATCHING:-8082}:8082"
     healthcheck:
       <<: *role-health
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/health/ready"]
@@ -146,10 +148,10 @@ services:
     environment:
       DATABASE_URL: postgres://pooleno@postgres:5432/pooleno
       KAFKA_BROKERS: kafka:19092
-      EXTERNAL_API_URL: http://mock-api:58080/v1/notifications
+      EXTERNAL_API_URL: http://mock-api:18080/v1/notifications
       HEALTH_HOST: 0.0.0.0
     ports:
-      - "127.0.0.1:8083:8083"
+      - "127.0.0.1:${HOST_PORT_EXTERNAL:-8083}:8083"
     healthcheck:
       <<: *role-health
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health/ready"]
@@ -166,10 +168,10 @@ services:
     command: ["node", "dist/mock-api/server.js"]
     environment:
       MOCK_API_HOST: 0.0.0.0
-      MOCK_API_PORT: 58080
+      MOCK_API_PORT: 18080
       MOCK_API_DATABASE: /var/lib/mock-api/mock-api.sqlite
     ports:
-      - "127.0.0.1:58080:58080"
+      - "127.0.0.1:${HOST_PORT_MOCK_API:-18080}:18080"
     volumes:
       - mock-data:/var/lib/mock-api
     healthcheck:
@@ -177,10 +179,25 @@ services:
         - CMD
         - node
         - -e
-        - "require('node:net').connect(58080, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"
+        - "require('node:net').connect(18080, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"
       interval: 1s
       timeout: 2s
       retries: 30
+
+  # Runs the checks and the walkthroughs from inside this network, so that ./review.sh needs
+  # nothing but Docker on the host. Started only on request, never by a plain `up`.
+  verify:
+    profiles: [verify]
+    build:
+      context: .
+      target: verify
+    image: pooleno-order-processing:verify
+    environment:
+      TEST_DATABASE_URL: postgres://pooleno@postgres:5432/pooleno_test
+      TEST_KAFKA_BROKERS: kafka:19092
+      API_URL: http://api:8080
+      MOCK_API_URL: http://mock-api:18080
+      NO_COLOR: "1"
 
 volumes:
   postgres-data:

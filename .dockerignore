@@ -3,7 +3,11 @@
 !package-lock.json
 !tsconfig.json
 !tsconfig.build.json
+!tsconfig.mock.json
 !src/
 !migrations/
 !mock-api/
-!tsconfig.mock.json
+!tests/
+!scripts/
+!vitest.config.ts
+!eslint.config.js

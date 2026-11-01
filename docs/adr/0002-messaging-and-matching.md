@@ -1,11 +1,11 @@
-# ADR 0002: Phase 2 messaging and matching choices
+# ADR 0002: Messaging and matching
 
-- **Status:** accepted; Phase 2 was reviewed and approved on 2026-10-31
+- **Status:** accepted
 - **Date:** 2026-10-31
 
 ## Context
 
-The handoff fixes the design of this phase: an ordered Outbox publisher with one owner, topic `orders.accepted` keyed by symbol, group `matching-v1`, a pure matching engine, and one transaction for trades, order changes, progress and Inbox. [ADR 0001](0001-phase-1-tooling.md) left two choices to this phase, the Kafka client and the balanced tree. This ADR records those, and the decisions the handoff left to the implementation.
+Accepted orders reach the matcher through an ordered Outbox publisher with one owner, on topic `orders.accepted` keyed by symbol, in group `matching-v1`. A pure engine computes each match, and one transaction saves the trades, order changes, progress and Inbox. This ADR records the choices behind that design, including the Kafka client and the balanced tree.
 
 ## Decision: versions
 
@@ -59,7 +59,7 @@ The package is CommonJS with no named export, so it is imported the way Node.js 
 | Auto-creation | Off | `kafka-init` creates the topic deliberately and refuses a wrong partition count |
 | Partitioner | Pinned to `compatibilityPartitioner` | A changed client default must not move a symbol |
 
-**Recovery horizon:** if matching stays down for longer than retention, unapplied events can be gone from Kafka. They are still in the Outbox, and the sequence guard blocks rather than skips, so an operator republishes them. See [Operator procedures](#operator-procedures).
+**Recovery horizon:** if matching stays down for longer than retention, unapplied events can be gone from Kafka. They are still in the Outbox, and the sequence guard blocks rather than skips, so an operator [republishes them](../operations.md#lost-or-missing-events).
 
 ## Decision: single ownership
 
@@ -81,7 +81,7 @@ This is enforced ownership for a single-owner design, not a proven distributed f
 - `markPublished` is outside the `try` around the send. A database failure after an acknowledged send therefore cannot be recorded as a failed send. It stops the publisher, and the successor resends the same stored payload.
 - `outbox_events.payload` is sent as stored, so a resend is identical.
 
-**Backlog limit:** the handoff asks for a documented limit on acceptance during a Kafka outage. The limit is the disk available to PostgreSQL, and nothing refuses orders because of backlog. [ADR 0004](0004-phase-4-evidence-and-operations.md#decision-the-backlog-limit) revisits this with measurements and keeps it.
+**Backlog limit:** during a Kafka outage, acceptance is limited by the disk available to PostgreSQL, and nothing refuses orders because of backlog. [ADR 0004](0004-shutdown-health-and-visibility.md#decision-the-backlog-limit) gives the measurements and the reasons.
 
 ## Decision: the matching transaction
 
@@ -115,43 +115,18 @@ Only then is the match applied to the book, and only then is the offset committe
 
 A message that fails `parseOrderAccepted` can never succeed, so retrying it would only stop its partition. Matching saves it to the `quarantine` dead-letter table and then advances the offset. If that write fails, the partition holds until it succeeds. Only parse failures are treated this way: a database failure on a valid event is retried, because that event is a real order.
 
-- **A real order cannot be silently lost:** if a damaged message was an accepted order, the next valid event for that symbol hits the sequence guard, and the symbol holds until the [lost-event procedure](#operator-procedures) sends the order again from the Outbox.
+- **A real order cannot be silently lost:** if a damaged message was an accepted order, the next valid event for that symbol hits the sequence guard, and the symbol holds until the [lost-event procedure](../operations.md#lost-or-missing-events) sends the order again from the Outbox.
 - **What has no next event to trip the guard:** a damaged order that is its symbol's latest, or every event of a future `schemaVersion` published before matching is upgraded. These orders stay `QUEUED`, and `matching.lag` and `matching.quarantined` in `GET /ops/backlog` show them. The same procedure recovers them. Upgrade matching before the publisher.
 
 ## Decision: trades in `GET`
 
-`GET /v1/orders/{id}` gains a `trades` array: `tradeId`, `role` (`MAKER` or `TAKER`), `price`, `quantity` and `executedAt`. It omits the counterparty's order ID, which one client has no reason to learn about another's order. This is additive to the Phase 1 response.
-
-## Operator procedures
-
-A sequence gap blocks matching on purpose, and the error log names the sequence involved. Quarantined messages need no repair to keep matching moving, and are inspected under the [quarantine procedure](0003-phase-3-external-notifications.md#operator-procedures).
-
-**Lost or missing events.** The Outbox still holds every accepted event, so the publisher can send those again. Retention can remove an older event while newer ones remain, and the client then moves an expired position to the oldest record it still has. Matching blocks there on the sequence guard, ahead of anything republished, so the group must move to the end of the topic first. Everything unapplied is then sent again behind that position, in order, and the publisher must be stopped throughout so that no new event lands ahead of its predecessors.
-
-```bash
-docker compose stop matching publisher
-docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh \
-  --bootstrap-server kafka:19092 --group matching-v1 \
-  --topic orders.accepted --reset-offsets --to-latest --execute
-docker compose exec postgres psql -U pooleno -d pooleno -c "
-  UPDATE outbox_events e
-     SET published_at = NULL, next_attempt_at = now(), attempts = 0
-   WHERE e.published_at IS NOT NULL
-     AND e.acceptance_seq > COALESCE(
-       (SELECT p.last_applied_seq FROM matching_progress p WHERE p.symbol = e.symbol), 0);"
-docker compose start publisher matching
-```
-
-If Kafka's data is gone altogether, run `docker compose run --rm kafka-init` before the reset, which needs the topic to exist.
-
-Both repairs are covered by end-to-end tests, which make the same offset changes through the admin API. These commands were also run against the Compose stack, including a run with Kafka's volume deleted.
+`GET /v1/orders/{id}` gains a `trades` array: `tradeId`, `role` (`MAKER` or `TAKER`), `price`, `quantity` and `executedAt`. It omits the counterparty's order ID, which one client has no reason to learn about another's order.
 
 ## Consequences
 
 - Throughput is limited to one matcher, with one lane per partition. Database waits overlap across lanes, but matching calculations share one JavaScript thread, so a long calculation delays every lane and there is no CPU parallelism. This is the accepted design for version 1.
 - Duplicate delivery is expected and absorbed. Nothing here claims exactly-once behaviour across HTTP, PostgreSQL and Kafka, and the guarantee is at-least-once delivery with idempotent effects.
 - After a crash, restart takes up to the Kafka session timeout, because the group waits for the dead member to expire.
-- An event that keeps failing holds its partition and retries every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. Readiness reports `a partition is held on a failing event`, and `GET /ops/backlog` reports the lag. Nothing alerts on it ([ADR 0004](0004-phase-4-evidence-and-operations.md#limits-of-the-figures)). A failure shared by all lanes, such as a database outage, holds them all.
+- An event that keeps failing holds its partition and retries every `MATCHING_RESTART_DELAY_MS`, logging an error each time, until an operator acts. Readiness reports `a partition is held on a failing event`, and `GET /ops/backlog` reports the lag. Nothing alerts on it ([ADR 0004](0004-shutdown-health-and-visibility.md#limits-of-the-figures)). A failure shared by all lanes, such as a database outage, holds them all.
 - One large order delays the symbols on its partition, because they share a lane. Other partitions continue: in one run through the real role, with a 400,000-maker BTC order on partition 0, an ETH order on partition 2 finished at about 1.6 s and the BTC order at about 15.5 s. Each statement must finish within `MATCHING_STATEMENT_TIMEOUT_MS`, or the order retries and holds its partition until the limit is raised. A timed-out order must not be skipped, because it is a real accepted order. One run each on a development machine, through the real role with the 60 s default: 400,000 makers took about 16 s, 1,000,000 about 42 s and 2,000,000 about 101 s, all including startup. At the former 5 s limit, 400,000 makers never completed. The limit was not reached in these runs, so the largest order it allows is unknown, and no cap on makers per order exists.
-- Applying `002_matching.sql` to a database with data takes short write-blocking locks to build indexes, and the new check validates existing rows. Orders from Phase 1 are all `QUEUED` with a remainder, so they pass.
-- `fetch` in Node.js 26.7.0 (undici 8.9.0) stalled for 2.5 to 30 seconds when it reused an idle keep-alive connection. The same requests took milliseconds through a raw socket or `http.Agent`, and `fetch` stalled against a bare `node:http` server too, so the API is not the cause. The demo and the end-to-end tests send `connection: close`, which avoids it. The cause inside `fetch` was not traced, so Phase 3's outbound calls should not depend on its connection reuse without checking this first.
+- `fetch` in Node.js 26.7.0 (undici 8.9.0) stalled for 2.5 to 30 seconds when it reused an idle keep-alive connection. The same requests took milliseconds through a raw socket or `http.Agent`, and `fetch` stalled against a bare `node:http` server too, so the API is not the cause. The demo and the end-to-end tests send `connection: close`, which avoids it. The cause inside `fetch` was not traced, so nothing here depends on its connection reuse. [ADR 0003](0003-external-notifications.md#decision-http-client) records a later check.

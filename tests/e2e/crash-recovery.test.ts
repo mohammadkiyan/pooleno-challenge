@@ -46,7 +46,7 @@ const CRASH_BEFORE_OFFSET_COMMIT = './tests/e2e/crash-before-offset-commit.prelo
 const CLOSED_PORT = '127.0.0.1:1';
 const SESSION_TIMEOUT_MS = 6_000;
 
-// The statement in the operator procedures of docs/adr/0002-phase-2-messaging-and-matching.md.
+// The statement in the lost-event procedure of docs/operations.md.
 const REPUBLISH_UNAPPLIED_EVENTS = `
   UPDATE outbox_events e
      SET published_at = NULL, next_attempt_at = now(), attempts = 0
@@ -242,7 +242,7 @@ describe('the full flow through Kafka', { timeout: 120_000 }, () => {
     return messages.map((message) => (JSON.parse(message.value) as OrderAcceptedV1).eventId);
   }
 
-  describe('the agreed fixture', () => {
+  describe('the matching fixture', () => {
     async function place(api: RunningApi, body: CreateOrderBody): Promise<string> {
       const response = await postOrder(api, uniqueKey(), body);
       expect(response.status).toBe(202);
